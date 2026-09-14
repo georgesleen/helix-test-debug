@@ -126,8 +126,10 @@ an `#[ignore]`d one debuggable, so neither flag needs to be conditional, which
 a static template could not express anyway.
 
 `--test-threads=1` keeps stepping sequential, so a breakpoint hit is the only
-thread that moves. `--nocapture` lets the test's own output reach the terminal
-instead of being swallowed by the harness.
+thread that moves. `--nocapture` stops the harness swallowing the test's own
+output, which then appears in Helix's debug console alongside the adapter's
+own chatter, prefixed `(stdout):`. Without it a `println!` in the test you
+are debugging goes nowhere you can see.
 
 The breakpoint arrives as an adapter command in `preRunCommands`, which lldb
 runs after the target exists and before the process launches. Helix's Steel API
