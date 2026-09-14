@@ -259,4 +259,199 @@
 (check-false! "no debugger table means no adapter"
               (debugger-command "[[language]]\nname = \"rust\"\n"))
 
+;; test-outcome: the summary line libtest prints, shaped like real cargo
+;; output with the blank lines it actually emits
+(define one-target-output
+  (string-append
+   "running 2 tests\n"
+   "test analysis::signal::tests::settles_when_tail_in_band ... ok\n"
+   "test analysis::frequency::tests::verify_basic_equality ... ok\n"
+   "\n"
+   "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+   "\n"))
+
+;; Two test targets ran, the first passed and the second failed, so the
+;; last summary is the one that decides.
+(define two-target-output
+  (string-append
+   "running 1 test\n"
+   "test analysis::signal::tests::settles_when_tail_in_band ... ok\n"
+   "\n"
+   "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+   "\n"
+   "running 1 test\n"
+   "test divider::divides_by_two ... FAILED\n"
+   "\n"
+   "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n"
+   "\n"))
+
+(check-equal! "the only summary is returned"
+              "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+              (test-outcome one-target-output))
+(check-equal! "the last summary wins when several targets ran"
+              "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+              (test-outcome two-target-output))
+(check-false! "empty output has no summary" (test-outcome ""))
+(check-false! "output without a summary" (test-outcome "warning: unused variable\nrunning 0 tests\n"))
+(check-equal! "leading and trailing whitespace is removed"
+              "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+              (test-outcome "    test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out   \n"))
+(check-equal! "internal spacing is kept"
+              "test result: ok.  2 passed;  0 failed"
+              (test-outcome "test result: ok.  2 passed;  0 failed\n"))
+(check-equal! "a summary on the final line without a newline still counts"
+              "test result: ok. 1 passed; 0 failed"
+              (test-outcome "running 1 test\ntest result: ok. 1 passed; 0 failed"))
+(check-false! "a mention of the summary mid-line is not a summary"
+              (test-outcome "note: the test result: ok. line is missing\n"))
+
+;; outcome-failed?: the wording decides, never the counts
+(check-false! "an absent summary is not a failure" (outcome-failed? #f))
+(check-true! "a summary saying FAILED is a failure"
+             (outcome-failed? "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"))
+(check-false! "a summary saying ok is not a failure"
+              (outcome-failed? "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"))
+(check-false! "zero passed while saying ok is not a failure"
+              (outcome-failed? "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s"))
+(check-true! "zero failed while saying FAILED is still a failure"
+             (outcome-failed? "test result: FAILED. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"))
+;; Only an explicit failure counts as one, so neither word means no failure.
+(check-false! "a summary with neither word is not a failure"
+              (outcome-failed? "test result: interrupted. 1 passed"))
+;; Chosen reading: FAILED outranks ok when a summary somehow carries both.
+(check-true! "FAILED outranks ok in the same summary"
+             (outcome-failed? "test result: FAILED. 1 passed; 1 failed; ok so far"))
+
+;; panic-location: where to put the breakpoint after a failure, taken from
+;; the panic libtest prints with its assertion on the following line
+(define panic-output
+  (string-append
+   "running 1 test\n"
+   "thread 'analysis::signal::tests::rejects_ringing_tail' panicked at crates/kitest/src/analysis/signal.rs:74:9:\n"
+   "assertion failed: !s.settles_to(1.0, Tolerance::abs(0.05), 2.0)\n"
+   "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+   "test analysis::signal::tests::rejects_ringing_tail ... FAILED\n"
+   "\n"
+   "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n"))
+
+;; The harness unwinding panics again afterwards, so a later location must
+;; not displace the one that failed the test.
+(define two-panic-output
+  (string-append
+   "thread 'tests::first' panicked at src/analysis/signal.rs:74:9:\n"
+   "assertion failed: settled\n"
+   "thread 'tests::first' panicked at library/core/src/panicking.rs:221:5:\n"
+   "panic in a destructor during cleanup\n"))
+
+(check-equal! "the panic file and one-based line, column discarded"
+              (list "crates/kitest/src/analysis/signal.rs" 74)
+              (panic-location panic-output))
+(check-equal! "the first panic wins"
+              (list "src/analysis/signal.rs" 74)
+              (panic-location two-panic-output))
+(check-equal! "an absolute path is returned verbatim"
+              (list "/w/crate/src/lib.rs" 12)
+              (panic-location "thread 'main' panicked at /w/crate/src/lib.rs:12:5:\ncalled `Option::unwrap()` on a `None` value\n"))
+(check-false! "empty output has no panic" (panic-location ""))
+(check-false! "a passing run has no panic"
+              (panic-location "test result: ok. 1 passed; 0 failed\n"))
+(check-false! "a panic without a column is not a location"
+              (panic-location "thread 'main' panicked at src/lib.rs:12:\n"))
+(check-false! "a panic without a line is not a location"
+              (panic-location "thread 'main' panicked at src/lib.rs\n"))
+(check-false! "a non-numeric line is not a location"
+              (panic-location "thread 'main' panicked at src/lib.rs:here:9:\n"))
+
+;; test-names-from-list: the names `--list` prints, which is what --exact
+;; has to match
+(define list-output
+  (string-append
+   "analysis::signal::tests::settles_when_tail_in_band: test\n"
+   "analysis::frequency::tests::verify_basic_equality: test\n"
+   "\n"
+   "2 tests, 0 benchmarks\n"))
+
+(define mixed-list-output
+  (string-append
+   "analysis::signal::tests::settles_when_tail_in_band: test\n"
+   "analysis::signal::benches::throughput: benchmark\n"
+   "analysis::frequency::tests::verify_basic_equality: test\n"
+   "\n"
+   "2 tests, 1 benchmark\n"))
+
+(check-equal! "names in the order printed, suffix removed"
+              '("analysis::signal::tests::settles_when_tail_in_band"
+                "analysis::frequency::tests::verify_basic_equality")
+              (test-names-from-list list-output))
+(check-equal! "benchmarks are excluded"
+              '("analysis::signal::tests::settles_when_tail_in_band"
+                "analysis::frequency::tests::verify_basic_equality")
+              (test-names-from-list mixed-list-output))
+(check-equal! "empty output lists nothing" '() (test-names-from-list ""))
+(check-equal! "output with no test lines lists nothing"
+              '()
+              (test-names-from-list "\n0 tests, 0 benchmarks\n"))
+(check-equal! "an unrecognised suffix is ignored"
+              '("tests::kept")
+              (test-names-from-list "tests::dropped: tests\ntests::kept: test\ntests::also_dropped\n"))
+(check-equal! "neither sorted nor deduplicated"
+              '("tests::zeta" "tests::alpha" "tests::zeta")
+              (test-names-from-list "tests::zeta: test\ntests::alpha: test\ntests::zeta: test\n"))
+;; Chosen reading: the suffix alone decides, so a name with spaces is kept.
+(check-equal! "a name containing spaces is still a name"
+              '("an integration case")
+              (test-names-from-list "an integration case: test\n"))
+
+;; breakpoints->text: the on-disk form of the breakpoint list
+(check-equal! "the empty list writes nothing" "" (breakpoints->text '()))
+(check-equal! "one entry is terminated by a newline"
+              "src/analysis/signal.rs:74\n"
+              (breakpoints->text (list (list "src/analysis/signal.rs" 74))))
+(check-equal! "entries keep the order given, unsorted and undeduplicated"
+              "src/zeta.rs:9\nsrc/alpha.rs:1\nsrc/zeta.rs:9\n"
+              (breakpoints->text (list (list "src/zeta.rs" 9)
+                                       (list "src/alpha.rs" 1)
+                                       (list "src/zeta.rs" 9))))
+;; Chosen reading: the line number is rendered as written, not rounded.
+(check-equal! "a non-integer line number is rendered as written"
+              "src/lib.rs:12.5\n"
+              (breakpoints->text (list (list "src/lib.rs" 12.5))))
+
+;; text->breakpoints: reading that form back, tolerating a corrupt file
+(check-equal! "one entry parses with an integer line"
+              (list (list "src/analysis/signal.rs" 74))
+              (text->breakpoints "src/analysis/signal.rs:74\n"))
+(check-equal! "nothing to parse" '() (text->breakpoints ""))
+(check-equal! "blank lines are skipped"
+              (list (list "src/a.rs" 1) (list "src/b.rs" 2))
+              (text->breakpoints "\nsrc/a.rs:1\n\nsrc/b.rs:2\n\n"))
+(check-equal! "a corrupt line is skipped, the rest still parse"
+              (list (list "src/a.rs" 1) (list "src/b.rs" 2))
+              (text->breakpoints "src/a.rs:1\nsrc/broken.rs:nowhere\nno-colon-at-all\nsrc/b.rs:2\n"))
+(check-equal! "splitting happens at the last colon"
+              (list (list "src/generated:v2/lib.rs" 300))
+              (text->breakpoints "src/generated:v2/lib.rs:300\n"))
+
+;; The round trip is the property that matters, so assert it rather than a
+;; hand-written expectation.
+(define breakpoints
+  (list (list "crates/kitest/src/analysis/signal.rs" 74)
+        (list "src/lib.rs" 1)
+        (list "src/generated:v2/lib.rs" 300)))
+
+(check-equal! "writing then reading returns the same pairs"
+              breakpoints
+              (text->breakpoints (breakpoints->text breakpoints)))
+(check-equal! "the empty list round trips"
+              '()
+              (text->breakpoints (breakpoints->text '())))
+
+;; dirty-buffer-warning: what the user is told after an automatic write
+(check-equal! "the buffer name is reported unchanged"
+              "saved src/analysis/signal.rs before building"
+              (dirty-buffer-warning "src/analysis/signal.rs"))
+(check-equal! "a name with spaces is not quoted or altered"
+              "saved my crate/src/lib.rs before building"
+              (dirty-buffer-warning "my crate/src/lib.rs"))
+
 (finish!)
