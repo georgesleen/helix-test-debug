@@ -37,7 +37,7 @@ if ! LC_ALL=C grep -aq "helix/commands.scm" \
   skip "hx has no Steel support"
 fi
 
-for tool in cargo lldb-dap script; do
+for tool in cargo lldb-dap script setsid; do
   command -v "$tool" >/dev/null || skip "no $tool on PATH"
 done
 

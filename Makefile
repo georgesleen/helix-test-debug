@@ -1,4 +1,4 @@
-.PHONY: test compile-check helix-check fmt check clean
+.PHONY: test compile-check helix-check integration-check fmt check clean
 
 CHECK_DIR = .compile-check
 
@@ -24,10 +24,16 @@ compile-check:
 helix-check:
 	bash tests/helix-check.sh
 
+# Run the commands in a real Steel-enabled helix against tests/fixture,
+# which is the only check that executes a command body. Skips itself when
+# helix, cargo or the adapter is missing.
+integration-check:
+	bash tests/integration.sh
+
 fmt:
 	nixfmt flake.nix
 
-check: test compile-check helix-check
+check: test compile-check helix-check integration-check
 	nixfmt --check flake.nix
 
 clean:

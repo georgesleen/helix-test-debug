@@ -13,4 +13,5 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+      # make check skips integration-check here: no Steel-enabled helix in CI.
       - run: nix develop --command make check

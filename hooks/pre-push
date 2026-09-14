@@ -15,4 +15,7 @@ make compile-check
 echo "[pre-push] cog loads in helix..."
 make helix-check
 
+echo "[pre-push] commands run in helix..."
+make integration-check
+
 echo "[pre-push] all checks passed."
