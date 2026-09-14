@@ -3,4 +3,4 @@
 
 (provide debug-start)
 
-(define (debug-start template . arguments) (void))
+(define (debug-start template . arguments) void)

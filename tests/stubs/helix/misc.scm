@@ -4,5 +4,5 @@
 (provide set-status!
          set-error!)
 
-(define (set-status! message) (void))
-(define (set-error! message) (void))
+(define (set-status! message) void)
+(define (set-error! message) void)

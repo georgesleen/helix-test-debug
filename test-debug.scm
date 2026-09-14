@@ -83,10 +83,12 @@
 
 ;; Build the target off the editor thread, then come back to launch. The
 ;; build blocks whichever thread it runs on, so it must not be this one.
+;; Ends on a status call so the command yields void: a typed command's
+;; return value is stringified onto the statusline, and `void` is a value
+;; rather than a procedure here, so it cannot be called for one.
 (define (build-and-launch! path root test)
   (define arguments (build-arguments (path-within root path)))
   (define line (breakpoint-line (test-declaration-line test)))
-  (status! (string-append "building " (test-name test)))
   (spawn-native-thread
    (lambda ()
      (let ([output (captured-output "cargo" arguments root)])
@@ -96,7 +98,7 @@
             (if binary
                 (launch! binary test path line)
                 (report-build-failure! test root arguments))))))))
-  (void))
+  (status! (string-append "building " (test-name test))))
 
 ;;@doc
 ;; Debug the test under the cursor. Builds its cargo test target, then
