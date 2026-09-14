@@ -28,14 +28,17 @@ Then pull the command into global scope from `~/.config/helix/helix.scm`, which
 is what makes it dispatchable as `:debug-test`:
 
 ```scheme
-(require (only-in "cogs/test-debug.scm" debug-test))
+(require "cogs/test-debug.scm")
 (provide debug-test)
 ```
 
 A keybinding is optional. Helix's debug commands live under `<space>G`, and `d`
-is free there, so in `init.scm`:
+is free there. `add-global-keybinding` merges through Helix's own keymap merge,
+so the rest of the submenu survives. In `init.scm`:
 
 ```scheme
+(require "helix/keymaps.scm")
+
 (add-global-keybinding
  (hash "normal" (hash "space" (hash "G" (hash "d" ":debug-test")))))
 ```
