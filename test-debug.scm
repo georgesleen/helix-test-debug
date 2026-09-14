@@ -50,7 +50,10 @@
 (define *poll-limit* 1200)
 
 ;; Label of the job in flight, or #f when idle. Editor thread only.
-(define *job* #f)
+(define *job-label* #f)
+
+(define (job-running?)
+  (string? *job-label*))
 
 ;; Last resolved request, so it can be repeated from another buffer.
 (define *last-request* #f)
@@ -131,14 +134,14 @@
 (define (elapsed-seconds ticks)
   (quotient (* ticks *poll-interval-ms*) 1000))
 
-;; Re-arming this timer is what wakes the editor. A callback queued from a
-;; worker thread is drained only when the event loop wakes, so without a
-;; timer the result would not land until the next keypress.
-(define (pump! label ticks)
-  (when (string? *job*)
+;; Re-arm a timer until the job finishes. This is what wakes the editor: a
+;; callback queued from a worker thread is drained only when the event loop
+;; wakes, so without it the result would not land until the next keypress.
+(define (keep-awake! label ticks)
+  (when (job-running?)
     (if (> ticks *poll-limit*)
         (begin
-          (set! *job* #f)
+          (set! *job-label* #f)
           (fail! (string-append "gave up waiting for cargo after "
                                 (number->string (elapsed-seconds ticks))
                                 "s")))
@@ -149,21 +152,21 @@
                                   "s)"))
           (enqueue-thread-local-callback-with-delay
            *poll-interval-ms*
-           (lambda () (pump! label (+ ticks 1))))))))
+           (lambda () (keep-awake! label (+ ticks 1))))))))
 
 ;; Run cargo on a worker thread; complete! runs on the editor thread with
 ;; cargo's stdout, or #f when it could not be run.
 (define (start-job! label root arguments complete!)
-  (set! *job* label)
+  (set! *job-label* label)
   (status! label)
   (spawn-native-thread
    (lambda ()
      (let ([output (captured-output "cargo" arguments root)])
        (hx.block-on-task
         (lambda ()
-          (set! *job* #f)
+          (set! *job-label* #f)
           (complete! output))))))
-  (pump! label 1))
+  (keep-awake! label 1))
 
 ;; Start a session on a binary, stopped at file and line. The stop location
 ;; is a parameter because debugging a failure stops where it panicked, not
@@ -225,8 +228,8 @@
     (status! (dirty-buffer-warning (base-name (focused-path))))))
 
 (define (with-request! act!)
-  (if (string? *job*)
-      (fail! (string-append "already " *job*))
+  (if (job-running?)
+      (fail! (string-append "already " *job-label*))
       (let ([request (request-at-cursor)])
         (if (string? request)
             (fail! request)
@@ -247,7 +250,7 @@
 ;; Debug the test from the last test-debug or test-run again, from any
 ;; buffer.
 (define (test-again)
-  (cond [(string? *job*) (fail! (string-append "already " *job*))]
+  (cond [(job-running?) (fail! (string-append "already " *job-label*))]
         [*last-request* (debug-request! *last-request*)]
         [else (fail! "nothing debugged yet")]))
 
@@ -288,9 +291,9 @@
 ;; Stop waiting on the build in flight. Cargo keeps running; only the wait
 ;; is abandoned.
 (define (test-cancel)
-  (if (string? *job*)
+  (if (job-running?)
       (begin
-        (set! *job* #f)
+        (set! *job-label* #f)
         (status! "stopped waiting"))
       (status! "nothing in flight")))
 
