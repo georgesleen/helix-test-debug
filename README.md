@@ -2,7 +2,7 @@
 
 Debug or run the Rust test under the cursor, in one keystroke.
 
-Put the cursor anywhere inside a `#[test]` function and run `:debug-test`. The
+Put the cursor anywhere inside a `#[test]` function and run `:test-debug`. The
 cog works out which cargo test target holds the file, builds it without running
 it, finds the binary cargo produced, and starts a Helix debug session stopped
 on the test's first line. Nothing is typed: no binary path, no hashed filename,
@@ -10,16 +10,24 @@ no test filter.
 
 | command | what it does |
 | --- | --- |
-| `:debug-test` | build and debug the test under the cursor |
-| `:run-test` | run it without a debugger and report the result |
-| `:debug-test-again` | repeat the last one from any buffer |
+| `:test-debug` | build and debug the test under the cursor |
+| `:test-run` | run it without a debugger and report the result |
+| `:test-debug-failure` | run it, and if it fails debug it stopped where it panicked |
+| `:test-again` | repeat the last one from any buffer |
+| `:test-cancel` | stop waiting on a build in flight |
+| `:test-doctor` | check everything it needs is in place, and say what to fix |
 | `:debug-variables` | show the variables popup and keep it fresh |
 | `:debug-step-over` `:debug-step-in` `:debug-step-out` `:debug-continue` | step, then refresh that popup |
-| `:test-debug-doctor` | check everything it needs is in place, and say what to fix |
+
+Commands acting on the test under the cursor are prefixed `test-`, and those
+acting on a running session `debug-`, so typing either prefix in the command
+palette reveals that whole half of the feature.
 
 The test is selected by its full path with `--exact`, so a name that is a
 prefix of another does not drag it along, and the build runs off the editor
-thread with the elapsed time on the statusline.
+thread with the elapsed time on the statusline. A buffer with unsaved
+changes is written first, because cargo would otherwise compile code that
+does not match the lines the breakpoint was computed from.
 
 Helix's own variables popup is built from a snapshot taken when you open it
 and never updates, so it goes stale the moment you step. It is installed
@@ -48,7 +56,7 @@ which is what makes them dispatchable:
 
 ```scheme
 (require "cogs/test-debug.scm")
-(provide debug-test run-test debug-test-again)
+(provide test-debug test-run test-again)
 ```
 
 ### With nix
@@ -78,7 +86,7 @@ so the rest of the submenu survives. In `init.scm`:
 (require "helix/keymaps.scm")
 
 (add-global-keybinding
- (hash "normal" (hash "space" (hash "G" (hash "d" ":debug-test")))))
+ (hash "normal" (hash "space" (hash "G" (hash "d" ":test-debug")))))
 ```
 
 ## The debugger template

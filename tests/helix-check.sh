@@ -33,8 +33,20 @@ trap 'rm -rf "$workdir"' EXIT
 
 mkdir -p "$workdir/config/helix/cogs"
 cp test-debug.scm test-debug-rust.scm "$workdir/config/helix/cogs/"
-printf '(require "cogs/test-debug.scm")\n(provide debug-test run-test debug-test-again)\n' \
-  >"$workdir/config/helix/helix.scm"
+cat >"$workdir/config/helix/helix.scm" <<'EOF'
+(require "cogs/test-debug.scm")
+(provide test-debug
+         test-run
+         test-again
+         test-doctor
+         test-debug-failure
+         test-cancel
+         debug-variables
+         debug-step-over
+         debug-step-in
+         debug-step-out
+         debug-continue)
+EOF
 : >"$workdir/config/helix/init.scm"
 printf 'fn main() {}\n' >"$workdir/probe.rs"
 

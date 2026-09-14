@@ -27,15 +27,17 @@
 (require-builtin steel/strings)
 (require "test-debug-rust.scm")
 
-(provide debug-test
-         run-test
-         debug-test-again
+(provide test-debug
+         test-run
+         test-again
+         test-doctor
+         test-debug-failure
+         test-cancel
          debug-variables
          debug-step-over
          debug-step-in
          debug-step-out
-         debug-continue
-         test-debug-doctor)
+         debug-continue)
 
 ;; Debugger template this cog drives, taking the binary, the test filter,
 ;; the source file and the line to stop on. README.md carries the
@@ -63,10 +65,10 @@
 (define *refresh-delay-ms* 120)
 
 (define (status! message)
-  (set-status! (string-append "test-debug: " message)))
+  (set-status! (string-append "test: " message)))
 
 (define (fail! message)
-  (set-error! (string-append "test-debug: " message)))
+  (set-error! (string-append "test: " message)))
 
 (define (focused-path)
   (editor-document->path (editor->doc-id (editor-focus))))
@@ -163,20 +165,27 @@
           (complete! output))))))
   (pump! label 1))
 
-(define (launch! request binary)
+;; Start a session on a binary, stopped at file and line. The stop location
+;; is a parameter because debugging a failure stops where it panicked, not
+;; where the test began.
+(define (launch! request binary file line)
   (terminate-existing!)
-  (helix.debug-start *template*
-                     binary
-                     (request-filter request)
-                     (request-file request)
-                     (number->string (request-line request)))
+  (helix.debug-start *template* binary (request-filter request) file (number->string line))
   (status! (string-append (request-filter request)
                           " at "
-                          (request-file request)
+                          file
                           ":"
-                          (number->string (request-line request)))))
+                          (number->string line))))
 
-(define (debug-request! request)
+(define (report-build-failure! request arguments)
+  (fail! (string-append "no test binary built; run `cargo "
+                        (string-join arguments " ")
+                        "` in "
+                        (request-root request)
+                        " to see why")))
+
+;; Build, then hand the binary to at-binary!, which decides where to stop.
+(define (build-then! request at-binary!)
   (set! *last-request* request)
   (let ([arguments (build-arguments (request-relative-path request))])
     (start-job!
@@ -186,19 +195,13 @@
      (lambda (output)
        (let ([binary (if (string? output) (executable-from-cargo-output output) #f)])
          (if binary
-             (launch! request binary)
-             (fail! (string-append "no test binary built; run `cargo "
-                                   (string-join arguments " ")
-                                   "` in "
-                                   (request-root request)
-                                   " to see why"))))))))
+             (at-binary! binary)
+             (report-build-failure! request arguments)))))))
 
-;; Last line of cargo's test summary, which is the part worth reading.
-(define (test-outcome output)
-  (let loop ([lines (source-lines output)] [outcome #f])
-    (cond [(empty? lines) outcome]
-          [(starts-with? (trim (car lines)) "test result:") (loop (cdr lines) (trim (car lines)))]
-          [else (loop (cdr lines) outcome)])))
+(define (debug-request! request)
+  (build-then! request
+               (lambda (binary)
+                 (launch! request binary (request-file request) (request-line request)))))
 
 (define (run-request! request)
   (set! *last-request* request)
@@ -213,30 +216,83 @@
            (fail! (string-append (request-filter request)
                                  " printed no result; the build probably failed")))))))
 
+;; Write the buffer before building, so cargo compiles the code on screen.
+;; An unsaved edit otherwise shifts every line the breakpoint was computed
+;; from.
+(define (save-if-dirty!)
+  (when (editor-document-dirty? (editor->doc-id (editor-focus)))
+    (helix.write)
+    (status! (dirty-buffer-warning (base-name (focused-path))))))
+
 (define (with-request! act!)
   (if (string? *job*)
       (fail! (string-append "already " *job*))
       (let ([request (request-at-cursor)])
-        (if (string? request) (fail! request) (act! request)))))
+        (if (string? request)
+            (fail! request)
+            (begin (save-if-dirty!) (act! request))))))
 
 ;;@doc
 ;; Debug the test under the cursor. Builds its cargo test target, then
 ;; starts a debug session stopped on the test's first line.
-(define (debug-test)
+(define (test-debug)
   (with-request! debug-request!))
 
 ;;@doc
 ;; Run the test under the cursor without a debugger and report its result.
-(define (run-test)
+(define (test-run)
   (with-request! run-request!))
 
 ;;@doc
-;; Debug the test from the last debug-test or run-test again, from any
+;; Debug the test from the last test-debug or test-run again, from any
 ;; buffer.
-(define (debug-test-again)
+(define (test-again)
   (cond [(string? *job*) (fail! (string-append "already " *job*))]
         [*last-request* (debug-request! *last-request*)]
         [else (fail! "nothing debugged yet")]))
+
+;; Run the test, and when it fails debug it stopped where it panicked. The
+;; panic path is reduced to a base name because that is what the adapter
+;; resolves against the binary's debug info.
+(define (debug-failure! request)
+  (start-job!
+   (string-append "running " (request-filter request))
+   (request-root request)
+   (run-arguments (request-relative-path request) (request-filter request))
+   (lambda (output)
+     (let* ([outcome (if (string? output) (test-outcome output) #f)]
+            [location (if (string? output) (panic-location output) #f)])
+       (cond
+         [(not (outcome-failed? outcome))
+          (status! (string-append (request-filter request)
+                                  " passed, nothing to debug: "
+                                  (if outcome outcome "no result")))]
+         [(not location)
+          (fail! (string-append (request-filter request)
+                                " failed but printed no panic location"))]
+         [else
+          (build-then! request
+                       (lambda (binary)
+                         (launch! request
+                                  binary
+                                  (base-name (car location))
+                                  (car (cdr location)))))])))))
+
+;;@doc
+;; Run the test under the cursor and, if it fails, debug it stopped at the
+;; line that panicked.
+(define (test-debug-failure)
+  (with-request! debug-failure!))
+
+;;@doc
+;; Stop waiting on the build in flight. Cargo keeps running; only the wait
+;; is abandoned.
+(define (test-cancel)
+  (if (string? *job*)
+      (begin
+        (set! *job* #f)
+        (status! "stopped waiting"))
+      (status! "nothing in flight")))
 
 ;; Rebuild the variables popup. Helix installs it under a fixed layer id,
 ;; so this replaces the stale one rather than stacking another.
@@ -312,8 +368,8 @@
     (list (check "cursor" (not (string? request)) (if (string? request) request "")))))
 
 ;;@doc
-;; Report whether everything debug-test needs is in place, and what to fix.
-(define (test-debug-doctor)
+;; Report whether everything test-debug needs is in place, and what to fix.
+(define (test-doctor)
   (let ([checks (append (list (check "cargo" (if (which "cargo") #t #f) "cargo is not on PATH"))
                         (configuration-checks (languages-toml))
                         (cursor-checks))])

@@ -34,7 +34,14 @@
          diagnosis
          diagnosis-ok?
          template-present?
-         debugger-command)
+         debugger-command
+         test-outcome
+         outcome-failed?
+         panic-location
+         test-names-from-list
+         breakpoints->text
+         text->breakpoints
+         dirty-buffer-warning)
 
 ;; Tokens that may precede `fn` in a declaration. An extern ABI string is
 ;; handled separately because it is not a fixed spelling.
@@ -359,3 +366,112 @@
                     (identifier-prefix-until (substring line 11 (string-length line)) #\")]
                    [(and in-debugger (starts-with? line "[")) #f]
                    [else (loop (cdr lines) in-debugger)]))])))
+
+;; Text following the first occurrence of marker, or #f when absent.
+(define (text-after text marker)
+  (let ([span (string-length marker)]
+        [limit (string-length text)])
+    (let loop ([index 0])
+      (cond [(> (+ index span) limit) #f]
+            [(equal? (substring text index (+ index span)) marker)
+             (substring text (+ index span) limit)]
+            [else (loop (+ index 1))]))))
+
+;; libtest ends the panic line with a colon before the message on the next
+;; line; trim-end only takes whitespace.
+(define (drop-trailing-colon text)
+  (if (ends-with? text ":")
+      (substring text 0 (- (string-length text) 1))
+      text))
+
+;; Trimmed text of the last test summary cargo printed, or #f. Several
+;; targets print several summaries and the last is the one that counts.
+(define (test-outcome output)
+  (let loop ([lines (source-lines output)] [outcome #f])
+    (cond [(empty? lines) outcome]
+          [(starts-with? (trim (car lines)) "test result:") (loop (cdr lines) (trim (car lines)))]
+          [else (loop (cdr lines) outcome)])))
+
+;; Whether a summary reports failure. The wording decides, not the counts,
+;; and only an explicit failure counts as one.
+(define (outcome-failed? outcome)
+  (if (string? outcome) (string-contains? outcome "FAILED") #f))
+
+(define *panic-marker* " panicked at ")
+
+;; (file line-number) from a panic line, or #f when it is not one.
+(define (panic-line-location line)
+  (let ([tail (text-after line *panic-marker*)])
+    (if (not tail)
+        #f
+        (let* ([trimmed (drop-trailing-colon (trim tail))]
+               [fields (split-many trimmed ":")])
+          (if (not (equal? (length fields) 3))
+              #f
+              (let ([number (string->number (list-ref fields 1))]
+                    [column (string->number (list-ref fields 2))])
+                (if (and (integer? number) (integer? column))
+                    (list (car fields) number)
+                    #f)))))))
+
+;; Where a failing test panicked, as (file line-number), or #f. The first
+;; panic is the one that failed the test; later ones are the harness
+;; unwinding.
+(define (panic-location output)
+  (let loop ([lines (source-lines output)])
+    (if (empty? lines)
+        #f
+        (let ([found (panic-line-location (car lines))])
+          (if found found (loop (cdr lines)))))))
+
+(define *test-suffix* ": test")
+
+;; Qualified test names from a libtest --list, in the order printed.
+;; Benchmarks and the trailing summary have no test suffix and drop out.
+(define (test-names-from-list output)
+  (let loop ([lines (source-lines output)] [found '()])
+    (cond [(empty? lines) (reverse found)]
+          [else
+           (let ([line (trim (car lines))])
+             (if (ends-with? line *test-suffix*)
+                 (loop (cdr lines)
+                       (cons (substring line 0 (- (string-length line)
+                                                  (string-length *test-suffix*)))
+                             found))
+                 (loop (cdr lines) found)))])))
+
+;; Breakpoints as one file:line per line, in the order given.
+(define (breakpoints->text breakpoints)
+  (let loop ([remaining breakpoints] [text ""])
+    (if (empty? remaining)
+        text
+        (let ([breakpoint (car remaining)])
+          (loop (cdr remaining)
+                (string-append text
+                               (car breakpoint)
+                               ":"
+                               (number->string (car (cdr breakpoint)))
+                               "\n"))))))
+
+;; One file:line into (file line-number), or #f. The split is at the last
+;; colon so a path may contain one.
+(define (text->breakpoint line)
+  (let ([fields (split-many line ":")])
+    (if (< (length fields) 2)
+        #f
+        (let ([number (string->number (last fields))]
+              [file (string-join (take fields (- (length fields) 1)) ":")])
+          (if (integer? number) (list file number) #f)))))
+
+;; Breakpoints parsed from text. A corrupt line is skipped rather than
+;; failing the parse, so a damaged file cannot stop the editor starting.
+(define (text->breakpoints text)
+  (let loop ([lines (source-lines text)] [found '()])
+    (cond [(empty? lines) (reverse found)]
+          [(equal? (trim (car lines)) "") (loop (cdr lines) found)]
+          [else
+           (let ([breakpoint (text->breakpoint (trim (car lines)))])
+             (loop (cdr lines) (if breakpoint (cons breakpoint found) found)))])))
+
+(define (dirty-buffer-warning name)
+  (string-append "saved " name " before building"))

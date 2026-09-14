@@ -3,6 +3,19 @@
 Versions stay below 1.0.0 while the command surface and the Steel API it
 depends on are still moving. Breaking changes may land in any 0.y bump.
 
+## Unreleased
+
+- Commands renamed for discoverability: `test-debug`, `test-run`,
+  `test-again`, `test-doctor` act on the test under the cursor; `debug-*`
+  act on a running session.
+- `:test-debug-failure` runs the test and, when it fails, starts a session
+  stopped at the line that panicked.
+- `:test-cancel` abandons the wait on a build in flight.
+- A dirty buffer is written before building.
+- `docs/specs/` holds one behavioural spec per concern. The tests for this
+  round were written from those specs by an author who could not see the
+  implementation.
+
 ## 0.1.0
 
 - `:debug-test` builds the cargo test target holding the cursor and starts a
