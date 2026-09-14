@@ -2,7 +2,9 @@
 ;; See ../README.md.
 
 (provide set-status!
-         set-error!)
+         set-error!
+         enqueue-thread-local-callback-with-delay)
 
 (define (set-status! message) void)
 (define (set-error! message) void)
+(define (enqueue-thread-local-callback-with-delay delay thunk) void)

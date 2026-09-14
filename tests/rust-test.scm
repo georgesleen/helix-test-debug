@@ -67,6 +67,74 @@
               (list "reads_the_port" 15)
               (test-at-line lines 400))
 
+;; declaration-name-at: what the failure message reports
+(check-equal! "names an untested helper" "helper" (declaration-name-at lines 4))
+(check-false! "nothing above the cursor" (declaration-name-at lines 1))
+
+;; module-prefix: the path a file contributes, as libtest spells it
+(check-equal! "nested library module" '("analysis" "signal") (module-prefix "src/analysis/signal.rs"))
+(check-equal! "directory module" '("analysis") (module-prefix "src/analysis/mod.rs"))
+(check-equal! "crate root contributes nothing" '() (module-prefix "src/lib.rs"))
+(check-equal! "binary root contributes nothing" '() (module-prefix "src/main.rs"))
+(check-equal! "integration test is its own root" '() (module-prefix "tests/skeleton.rs"))
+
+;; enclosing-modules: indentation decides what encloses what
+(check-equal! "single module" '("tests") (enclosing-modules lines 8))
+(check-equal! "nested modules, outermost first"
+              '("outer" "inner")
+              (enclosing-modules (source-lines (string-append
+                                                "mod outer {\n"
+                                                "    mod inner {\n"
+                                                "        #[test]\n"
+                                                "        fn deep() {\n"
+                                                "        }\n"
+                                                "    }\n"
+                                                "    #[test]\n"
+                                                "    fn shallow() {\n"
+                                                "    }\n"
+                                                "}\n"))
+                                 3))
+(check-equal! "a sibling module does not enclose"
+              '("outer")
+              (enclosing-modules (source-lines (string-append
+                                                "mod outer {\n"
+                                                "    mod inner {\n"
+                                                "        fn deep() {\n"
+                                                "        }\n"
+                                                "    }\n"
+                                                "    #[test]\n"
+                                                "    fn shallow() {\n"
+                                                "    }\n"
+                                                "}\n"))
+                                 6))
+(check-equal! "a bodyless mod declaration encloses nothing"
+              '()
+              (enclosing-modules (source-lines (string-append
+                                                "mod other;\n"
+                                                "#[test]\n"
+                                                "fn flat() {\n"
+                                                "}\n"))
+                                 2))
+(check-equal! "tab indentation still nests"
+              '("tests")
+              (enclosing-modules (source-lines (string-append
+                                                "#[cfg(test)]\n"
+                                                "mod tests {\n"
+                                                "\t#[test]\n"
+                                                "\tfn tabbed() {\n"
+                                                "\t}\n"
+                                                "}\n"))
+                                 3))
+
+;; qualified-test-name: exactly what `<binary> --list` prints, so --exact
+;; selects one test
+(check-equal! "library unit test path"
+              "analysis::signal::tests::settles_when_tail_in_band"
+              (qualified-test-name "src/analysis/signal.rs" lines (test-at-line lines 10)))
+(check-equal! "integration test path omits the file"
+              "tests::settles_when_tail_in_band"
+              (qualified-test-name "tests/skeleton.rs" lines (test-at-line lines 10)))
+
 ;; breakpoint-line: anchoring on the declaration resolves into the harness
 ;; closure, so the body's first line is what gets used
 (check-equal! "body line is one past the declaration, one-based" 10 (breakpoint-line 8))
@@ -87,6 +155,15 @@
 (check-equal! "unrecognised location still builds"
               '("test" "--no-run" "--message-format=json")
               (build-arguments "build.rs"))
+
+;; run-arguments: the filter goes past `--` to the test binary, pinned to
+;; one test
+(check-equal! "run one library test"
+              '("test" "--lib" "--" "analysis::signal::tests::settles" "--exact" "--include-ignored")
+              (run-arguments "src/analysis/signal.rs" "analysis::signal::tests::settles"))
+(check-equal! "run one integration test"
+              '("test" "--test" "skeleton" "--" "divider_op" "--exact" "--include-ignored")
+              (run-arguments "tests/skeleton.rs" "divider_op"))
 
 ;; path helpers
 (check-equal! "parent of a nested file" "/home/g/crate/src" (parent-directory "/home/g/crate/src/lib.rs"))

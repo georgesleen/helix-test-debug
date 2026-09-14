@@ -1,20 +1,7 @@
 ;; helix-test-debug: rust half. Locates the test under the cursor and
 ;; derives the cargo invocation and breakpoint that debug it.
 ;;
-;; Copyright (C) 2026 George Sleen
-;;
-;; This program is free software: you can redistribute it and/or modify it
-;; under the terms of the GNU Lesser General Public License as published by
-;; the Free Software Foundation, either version 3 of the License, or (at
-;; your option) any later version.
-;;
-;; This program is distributed in the hope that it will be useful, but
-;; WITHOUT ANY WARRANTY; without even the implied warranty of
-;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser
-;; General Public License for more details.
-;;
-;; You should have received a copy of the GNU Lesser General Public License
-;; along with this program. If not, see <https://www.gnu.org/licenses/>.
+;; SPDX-License-Identifier: LGPL-3.0-or-later
 ;;
 ;; Every function here is pure: filesystem access arrives as an injected
 ;; predicate. That keeps this half runnable under a bare steel interpreter,
@@ -29,9 +16,14 @@
          test-at-line
          test-name
          test-declaration-line
+         declaration-name-at
+         module-prefix
+         enclosing-modules
+         qualified-test-name
          breakpoint-line
          target-arguments
          build-arguments
+         run-arguments
          parent-directory
          base-name
          join-path
@@ -44,20 +36,26 @@
 (define *function-modifiers*
   '("pub" "pub(crate)" "pub(super)" "pub(self)" "async" "const" "unsafe" "extern" "default"))
 
+;; Tokens that may precede `mod`.
+(define *module-modifiers* '("pub" "pub(crate)" "pub(super)" "pub(self)"))
+
 (define (member? item items)
   (not (empty? (filter (lambda (candidate) (equal? candidate item)) items))))
 
 (define (source-lines text)
   (split-many text "\n"))
 
+;; Identifier up to the first occurrence of `stop`.
+(define (identifier-prefix-until token stop)
+  (let loop ([chars (string->list token)] [kept '()])
+    (cond [(empty? chars) (list->string (reverse kept))]
+          [(char=? (car chars) stop) (list->string (reverse kept))]
+          [else (loop (cdr chars) (cons (car chars) kept))])))
+
 ;; Identifier up to the first `(` or `<`, so `foo()` and `foo<T>(` both
 ;; yield foo.
 (define (identifier-prefix token)
-  (let loop ([chars (string->list token)] [kept '()])
-    (cond [(empty? chars) (list->string (reverse kept))]
-          [(char=? (car chars) #\() (list->string (reverse kept))]
-          [(char=? (car chars) #\<) (list->string (reverse kept))]
-          [else (loop (cdr chars) (cons (car chars) kept))])))
+  (identifier-prefix-until (identifier-prefix-until token #\() #\<))
 
 ;; Name of the function declared on this line, or #f when the line does not
 ;; declare one.
@@ -136,6 +134,76 @@
 (define (test-declaration-line test)
   (car (cdr test)))
 
+;; Name of the nearest declaration governing a line, whether or not it is a
+;; test. Used to say what was found when no test was.
+(define (declaration-name-at lines line)
+  (if (empty? lines)
+      #f
+      (let ([declaration (declaration-line-at lines line)])
+        (if declaration (function-name (list-ref lines declaration)) #f))))
+
+;; Depth of a line's indentation. Tabs count as one each, which is enough
+;; because only the ordering of depths matters, never the column.
+(define (indentation line)
+  (let loop ([chars (string->list line)] [count 0])
+    (cond [(empty? chars) count]
+          [(char=? (car chars) #\space) (loop (cdr chars) (+ count 1))]
+          [(char=? (car chars) #\tab) (loop (cdr chars) (+ count 1))]
+          [else count])))
+
+;; Module this line declares, or #f. `mod foo;` is a declaration without a
+;; body and never encloses anything, so it is excluded.
+(define (module-name line)
+  (let loop ([tokens (split-whitespace line)])
+    (cond [(empty? tokens) #f]
+          [(equal? (car tokens) "mod")
+           (if (empty? (cdr tokens))
+               #f
+               (let ([name (identifier-prefix-until (car (cdr tokens)) #\{)])
+                 (if (or (equal? name "") (ends-with? name ";")) #f name)))]
+          [(member? (car tokens) *module-modifiers*) (loop (cdr tokens))]
+          [else #f])))
+
+;; Modules enclosing a declaration, outermost first. A module encloses it
+;; when it is declared above and indented less, which holds for any
+;; conventionally formatted source.
+(define (enclosing-modules lines declaration)
+  (let loop ([index (- declaration 1)]
+             [depth (indentation (list-ref lines declaration))]
+             [found '()])
+    (if (< index 0)
+        found
+        (let* ([line (list-ref lines index)]
+               [name (module-name line)]
+               [depth-here (indentation line)])
+          (if (and name (< depth-here depth))
+              (loop (- index 1) depth-here (cons name found))
+              (loop (- index 1) depth found))))))
+
+;; Module path a source file contributes, given its path relative to the
+;; crate root. Files under src/ are modules of the library; a test or
+;; benchmark file is its own crate root and contributes nothing.
+(define (module-prefix relative-path)
+  (let ([segments (split-many relative-path "/")])
+    (if (or (empty? segments) (not (equal? (car segments) "src")))
+        '()
+        (let ([inner (cdr segments)])
+          (if (empty? inner)
+              '()
+              (let* ([leaf (strip-rust-extension (last inner))]
+                     [branches (take inner (- (length inner) 1))])
+                (if (member? leaf '("lib" "main" "mod"))
+                    branches
+                    (append branches (list leaf)))))))))
+
+;; The path libtest matches with --exact: the file's module path, the
+;; modules declared around the test, then the test itself.
+(define (qualified-test-name relative-path lines test)
+  (string-join (append (module-prefix relative-path)
+                       (enclosing-modules lines (test-declaration-line test))
+                       (list (test-name test)))
+               "::"))
+
 ;; One-based line of the first statement in the body. A breakpoint on the
 ;; declaration itself resolves into the harness closure that wraps the test
 ;; rather than the test body.
@@ -170,6 +238,19 @@
 (define (build-arguments relative-path)
   (append (list "test" "--no-run" "--message-format=json")
           (target-arguments relative-path)))
+
+;; Flags that pin a run to exactly one test. --exact makes the filter a
+;; whole-path match instead of a substring, and --include-ignored costs
+;; nothing for a test that is not ignored while making an #[ignore]d one
+;; runnable, so neither flag has to be conditional.
+(define *filter-flags* '("--exact" "--include-ignored"))
+
+;; Full cargo invocation that builds and runs exactly one test.
+(define (run-arguments relative-path filter)
+  (append (list "test")
+          (target-arguments relative-path)
+          (list "--" filter)
+          *filter-flags*))
 
 (define (parent-directory path)
   (let ([segments (split-many path "/")])

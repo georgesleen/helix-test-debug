@@ -1,4 +1,4 @@
-.PHONY: test compile-check fmt check clean
+.PHONY: test compile-check helix-check fmt check clean
 
 CHECK_DIR = .compile-check
 
@@ -19,10 +19,15 @@ compile-check:
 	steel $(CHECK_DIR)/driver.scm
 	rm -rf $(CHECK_DIR)
 
+# Load the cog in a real Steel-enabled helix. Skips itself when one is not
+# on PATH, so CI stays green.
+helix-check:
+	bash tests/helix-check.sh
+
 fmt:
 	nixfmt flake.nix
 
-check: test compile-check
+check: test compile-check helix-check
 	nixfmt --check flake.nix
 
 clean:

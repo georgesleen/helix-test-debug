@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Local gate: the same checks CI runs. Keep it cheap.
+# Local gate: the checks CI runs, plus the real-helix load check that CI
+# cannot run because the Steel fork is not packaged.
 set -euo pipefail
 
 echo "[pre-push] format check..."
@@ -10,5 +11,8 @@ steel tests/rust-test.scm
 
 echo "[pre-push] editor half compiles..."
 make compile-check
+
+echo "[pre-push] cog loads in helix..."
+make helix-check
 
 echo "[pre-push] all checks passed."

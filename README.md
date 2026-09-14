@@ -1,13 +1,22 @@
 # helix-test-debug
 
-Debug the Rust test under the cursor in one keystroke.
+Debug or run the Rust test under the cursor, in one keystroke.
 
-Put the cursor anywhere inside a `#[test]` function and run `:debug-test`.
-The cog works out which cargo test target holds the file, builds it without
-running it, finds the test binary cargo produced, and starts a Helix debug
-session stopped on the test's first line.
+Put the cursor anywhere inside a `#[test]` function and run `:debug-test`. The
+cog works out which cargo test target holds the file, builds it without running
+it, finds the binary cargo produced, and starts a Helix debug session stopped
+on the test's first line. Nothing is typed: no binary path, no hashed filename,
+no test filter.
 
-Nothing is typed: no binary path, no hashed filename, no test filter.
+| command | what it does |
+| --- | --- |
+| `:debug-test` | build and debug the test under the cursor |
+| `:run-test` | run it without a debugger and report the result |
+| `:debug-test-again` | repeat the last one from any buffer |
+
+The test is selected by its full path with `--exact`, so a name that is a
+prefix of another does not drag it along, and the build runs off the editor
+thread with the elapsed time on the statusline.
 
 Requires [Helix with the Steel plugin
 system](https://github.com/mattwparas/helix/tree/steel-event-system), `cargo`,
@@ -24,13 +33,32 @@ cp test-debug.scm test-debug-rust.scm ~/.config/helix/cogs/
 `test-debug.scm` requires `test-debug-rust.scm` from the same directory, so
 they must stay together.
 
-Then pull the command into global scope from `~/.config/helix/helix.scm`, which
-is what makes it dispatchable as `:debug-test`:
+Then pull the commands into global scope from `~/.config/helix/helix.scm`,
+which is what makes them dispatchable:
 
 ```scheme
 (require "cogs/test-debug.scm")
-(provide debug-test)
+(provide debug-test run-test debug-test-again)
 ```
+
+### With nix
+
+The flake ships a home-manager module that installs both halves, and the
+debugger template as a value you splice into your own rust language entry:
+
+```nix
+imports = [ inputs.helix-test-debug.homeManagerModules.default ];
+programs.helix.testDebug.enable = true;
+programs.helix.languages.language = [
+  {
+    name = "rust";
+    debugger.templates = [ inputs.helix-test-debug.lib.rustDebuggerTemplate ];
+  }
+];
+```
+
+The `require` line stays yours either way: `helix.scm` is where your own
+commands live, and a module cannot own that file without clobbering them.
 
 A keybinding is optional. Helix's debug commands live under `<space>G`, and `d`
 is free there. `add-global-keybinding` merges through Helix's own keymap merge,
@@ -68,10 +96,16 @@ completion = [
   { name = "source file" },
   { name = "line" },
 ]
-args = { program = "{0}", args = [ "{1}", "--test-threads=1", "--nocapture" ], preRunCommands = [ "breakpoint set --file {2} --line {3}" ] }
+args = { program = "{0}", args = [ "{1}", "--exact", "--include-ignored", "--test-threads=1", "--nocapture" ], preRunCommands = [ "breakpoint set --file {2} --line {3}" ] }
 ```
 
-Three parts of that are load-bearing.
+Four parts of that are load-bearing.
+
+`--exact` makes the filter a whole-path match, so the cog has to pass the test's
+full path (`analysis::signal::tests::settles_when_tail_in_band`) and exactly one
+test runs. `--include-ignored` costs nothing for an ordinary test while making
+an `#[ignore]`d one debuggable, so neither flag needs to be conditional, which
+a static template could not express anyway.
 
 `--test-threads=1` keeps stepping sequential, so a breakpoint hit is the only
 thread that moves. `--nocapture` lets the test's own output reach the terminal
@@ -116,8 +150,11 @@ injected predicate, and it runs under a bare `steel` interpreter, which is where
 its tests run.
 
 `test-debug.scm` is the editor half: it reads the cursor, runs cargo on a
-spawned thread so the build does not freeze the editor, and returns to the
-editor thread to start the session.
+spawned thread so the build does not freeze the editor, and polls from the
+editor thread to start the session. The polling is not just progress
+reporting: a callback queued from a worker thread is drained only when
+Helix's event loop wakes, so without a timer the session would not start
+until the next keypress.
 
 A second language would add its own pure half and one dispatch on file type.
 
@@ -127,15 +164,26 @@ A second language would add its own pure half and one dispatch on file type.
 make check
 ```
 
-`make test` runs the unit suite over the pure half: the cursor-to-test mapping,
-declaration parsing, target selection, the breakpoint line, and cargo's JSON
-output.
+`make test` runs the unit suite over the pure half: the cursor-to-test
+mapping, declaration parsing, module paths, target selection, the breakpoint
+line, and cargo's JSON output.
 
 `make compile-check` loads the editor half against the stub modules in
-`tests/stubs/`, which forces every identifier it uses to resolve. Helix
-registers `helix/commands.scm` and friends inside its own engine, so without
-the stubs a name taken from a module the cog forgot to require cannot fail
-until Helix loads the cog and reports `FreeIdentifier`.
+`tests/stubs/`, forcing every identifier it uses to resolve. Helix registers
+`helix/commands.scm` and friends inside its own engine, so without the stubs
+a name taken from a module the cog forgot to require cannot fail until Helix
+loads it and reports `FreeIdentifier`.
+
+`make helix-check` loads the cog in a real Steel-enabled Helix, and skips
+itself when one is not on `PATH`. It exists because the standalone
+interpreter is not a faithful stand-in: `(void)` in tail position compiles
+under steel 0.8.2 *and* under the exact revision Helix pins, yet Helix's own
+engine rejects it. Building a matching interpreter does not close that gap.
+
+One gap remains. Steel compiles a function body lazily, so an error of that
+kind surfaces only when the path executes, which no load-time check reaches.
+Closing it needs a fixture crate and a debugger, driven through a real
+editor.
 
 ## Limitations
 
@@ -145,9 +193,9 @@ upward past attributes and comments for an attribute containing `test`, which
 covers `#[test]` and the async variants such as `#[tokio::test]`. A cursor
 inside a nested function reports the nested one.
 
-The test filter is a substring, not `--exact`, so a test whose name is a prefix
-of another runs both. The debugger stops in whichever one hits the breakpoint
-first.
+Module paths are read from indentation, so a `mod` block whose brace sits on
+its own line, or source formatted with tabs, can produce a path `--exact`
+then fails to match.
 
 A file outside `src/`, `tests/` and `benches/` selects no cargo target, so every
 test target gets built and the last test binary cargo reports is the one used.
