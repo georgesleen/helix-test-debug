@@ -87,7 +87,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Screen capture with the escape sequences and carriage returns taken out.
-# The pty redraws, so this is a secondary signal only.
+# The pty redraws over itself, so this is readable but not tidy.
 screen() {
   sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\x1b[()][A-B0-9]//g' -e 'y/\r/\n/' "$1" |
     tr -s ' \n'
@@ -104,6 +104,13 @@ fail() {
     screen "$capture" | tail -40 >&2
   done
   exit 1
+}
+
+# An engine error raised inside a command body, as it lands on screen.
+engine_error() {
+  screen "$1" |
+    grep -oE 'error\[E[0-9]+\][^|]{0,60}|TailCall[^|]{0,40}|FreeIdentifier[^|]{0,40}|not supported: [^ ]+' |
+    head -1 || true
 }
 
 mkdir -p "$config/helix/cogs"
@@ -200,8 +207,9 @@ start_session() {
   done
 }
 
-# :test-run. The fixture's tests append their own path to $FIXTURE_TEST_LOG,
-# so which tests ran is observable rather than scraped off the screen.
+# :test-run. Two things have to happen: the right test runs, which the
+# fixture records to $FIXTURE_TEST_LOG, and the command reports its result
+# on the statusline, which is the only place a raised error would stop it.
 run_capture=$workdir/run.txt
 rm -f "$ran_log"
 LINGER=40 DEADLINE=70 start_session "$run_capture" ":$declaration" ":test-run"
@@ -215,10 +223,26 @@ while [[ ! -s $ran_log ]]; do
     fail "test-run ran no test in 45s" "$run_capture"
   fi
 done
-# Let the statusline catch up with cargo, and a second test slip through if
-# the filter is wrong.
-sleep 3
+
+outcome=
+waited=0
+while [[ $waited -lt 30 ]]; do
+  outcome=$(screen "$run_capture" | grep -o "test result:[^;]*;" | tail -1 || true)
+  if [[ -n $outcome ]]; then
+    break
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
 stop_session
+
+if [[ -z $outcome ]]; then
+  raised=$(engine_error "$run_capture")
+  if [[ -n $raised ]]; then
+    fail "test-run raised: $raised" "$run_capture"
+  fi
+  fail "test-run put no test result on the statusline in 30s" "$run_capture"
+fi
 
 ran=$(sort "$ran_log")
 if [[ $ran != "$test_path" ]]; then
@@ -226,12 +250,11 @@ if [[ $ran != "$test_path" ]]; then
 $ran" "$run_capture"
 fi
 
-if screen "$run_capture" | grep -q "test result: ok. 1 passed"; then
-  echo "integration-check: test-run reported $(screen "$run_capture" |
-    grep -o "test result: ok\. 1 passed[^;]*;" | tail -1)"
-else
-  echo "integration-check: test-run ran $test_path; statusline text not legible in the pty capture"
+if [[ $outcome != "test result: ok. 1 passed;" ]]; then
+  fail "test-run reported \"$outcome\", not one passing test" "$run_capture"
 fi
+
+echo "integration-check: test-run reported $outcome"
 
 # :test-debug. A started session means the test binary is alive and stopped
 # by the adapter, which is what /proc reports.

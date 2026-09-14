@@ -11,7 +11,8 @@ pub mod inner {
         use super::*;
 
         // Appends the test's own path to $FIXTURE_TEST_LOG, so the check can
-        // tell which tests ran rather than reading the editor's screen.
+        // tell which tests ran rather than reading the editor's screen. One
+        // write_all per line, because tests that run at once interleave.
         fn record(name: &str) {
             use std::io::Write;
             let path = match std::env::var("FIXTURE_TEST_LOG") {
@@ -23,7 +24,8 @@ pub mod inner {
                 .append(true)
                 .open(path)
                 .expect("open FIXTURE_TEST_LOG");
-            writeln!(log, "{name}").expect("write FIXTURE_TEST_LOG");
+            log.write_all(format!("{name}\n").as_bytes())
+                .expect("write FIXTURE_TEST_LOG");
         }
 
         #[test]
