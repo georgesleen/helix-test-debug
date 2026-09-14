@@ -13,10 +13,19 @@ no test filter.
 | `:debug-test` | build and debug the test under the cursor |
 | `:run-test` | run it without a debugger and report the result |
 | `:debug-test-again` | repeat the last one from any buffer |
+| `:debug-variables` | show the variables popup and keep it fresh |
+| `:debug-step-over` `:debug-step-in` `:debug-step-out` `:debug-continue` | step, then refresh that popup |
 
 The test is selected by its full path with `--exact`, so a name that is a
 prefix of another does not drag it along, and the build runs off the editor
 thread with the elapsed time on the statusline.
+
+Helix's own variables popup is built from a snapshot taken when you open it
+and never updates, so it goes stale the moment you step. It is installed
+under a fixed layer id, which means re-running it replaces that popup in
+place, so the stepping commands here rebuild it after the adapter reports
+the new stop location. Bind them over `<space>G n i o c` to get a variables
+view that follows the program.
 
 Requires [Helix with the Steel plugin
 system](https://github.com/mattwparas/helix/tree/steel-event-system), `cargo`,

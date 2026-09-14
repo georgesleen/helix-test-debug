@@ -13,7 +13,14 @@
 (require "helix/misc.scm")
 (require "helix/ext.scm")
 ;; The cursor line and the dap_* commands are static commands, not misc.
-(require (only-in "helix/static.scm" get-current-line-number dap_terminate))
+(require (only-in "helix/static.scm"
+                  get-current-line-number
+                  dap_terminate
+                  dap_variables
+                  dap_next
+                  dap_step_in
+                  dap_step_out
+                  dap_continue))
 (require-builtin helix/core/text as text.)
 (require-builtin steel/process)
 (require-builtin steel/strings)
@@ -21,7 +28,12 @@
 
 (provide debug-test
          run-test
-         debug-test-again)
+         debug-test-again
+         debug-variables
+         debug-step-over
+         debug-step-in
+         debug-step-out
+         debug-continue)
 
 ;; Debugger template this cog drives, taking the binary, the test filter,
 ;; the source file and the line to stop on. README.md carries the
@@ -38,6 +50,15 @@
 
 ;; Last resolved request, so it can be repeated from another buffer.
 (define *last-request* #f)
+
+;; Whether the variables popup is being kept fresh. Helix builds that
+;; popup from a snapshot and never updates it, so stepping refreshes it
+;; here instead.
+(define *watching-variables* #f)
+
+;; How long the adapter is given to report the new stop location before the
+;; popup is rebuilt.
+(define *refresh-delay-ms* 120)
 
 (define (status! message)
   (set-status! (string-append "test-debug: " message)))
@@ -214,3 +235,45 @@
   (cond [(string? *job*) (fail! (string-append "already " *job*))]
         [*last-request* (debug-request! *last-request*)]
         [else (fail! "nothing debugged yet")]))
+
+;; Rebuild the variables popup. Helix installs it under a fixed layer id,
+;; so this replaces the stale one rather than stacking another.
+(define (refresh-variables!)
+  (when *watching-variables*
+    (enqueue-thread-local-callback-with-delay *refresh-delay-ms* dap_variables)))
+
+;; Step, then rebuild the popup once the adapter has reported the new stop
+;; location.
+(define (step-then-refresh! step!)
+  (step!)
+  (refresh-variables!))
+
+;;@doc
+;; Show the variables popup and keep it fresh as you step. Helix builds it
+;; from a snapshot that never updates; call this again to stop refreshing.
+(define (debug-variables)
+  (set! *watching-variables* (not *watching-variables*))
+  (dap_variables)
+  (status! (if *watching-variables*
+               "variables follow each step"
+               "variables no longer refresh")))
+
+;;@doc
+;; Step over, refreshing the variables popup.
+(define (debug-step-over)
+  (step-then-refresh! dap_next))
+
+;;@doc
+;; Step into, refreshing the variables popup.
+(define (debug-step-in)
+  (step-then-refresh! dap_step_in))
+
+;;@doc
+;; Step out, refreshing the variables popup.
+(define (debug-step-out)
+  (step-then-refresh! dap_step_out))
+
+;;@doc
+;; Continue, refreshing the variables popup at the next stop.
+(define (debug-continue)
+  (step-then-refresh! dap_continue))

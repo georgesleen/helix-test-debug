@@ -3,7 +3,17 @@
 ;; on disk because mod.rs appends their provides at runtime.
 
 (provide get-current-line-number
-         dap_terminate)
+         dap_terminate
+         dap_variables
+         dap_next
+         dap_step_in
+         dap_step_out
+         dap_continue)
 
 (define (get-current-line-number) 0)
 (define (dap_terminate) void)
+(define (dap_variables) void)
+(define (dap_next) void)
+(define (dap_step_in) void)
+(define (dap_step_out) void)
+(define (dap_continue) void)
