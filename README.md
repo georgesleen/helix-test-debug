@@ -124,8 +124,18 @@ A second language would add its own pure half and one dispatch on file type.
 ## Tests
 
 ```sh
-make test
+make check
 ```
+
+`make test` runs the unit suite over the pure half: the cursor-to-test mapping,
+declaration parsing, target selection, the breakpoint line, and cargo's JSON
+output.
+
+`make compile-check` loads the editor half against the stub modules in
+`tests/stubs/`, which forces every identifier it uses to resolve. Helix
+registers `helix/commands.scm` and friends inside its own engine, so without
+the stubs a name taken from a module the cog forgot to require cannot fail
+until Helix loads the cog and reports `FreeIdentifier`.
 
 ## Limitations
 

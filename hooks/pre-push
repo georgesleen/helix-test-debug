@@ -8,4 +8,7 @@ nixfmt --check flake.nix
 echo "[pre-push] tests..."
 steel tests/rust-test.scm
 
+echo "[pre-push] editor half compiles..."
+make compile-check
+
 echo "[pre-push] all checks passed."

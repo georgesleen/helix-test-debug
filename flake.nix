@@ -36,6 +36,20 @@
             steel tests/rust-test.scm | tee $out
           '';
 
+          compile-check =
+            pkgs.runCommand "helix-test-debug-compile-check"
+              {
+                nativeBuildInputs = [
+                  pkgs.gnumake
+                  pkgs.steel
+                ];
+              }
+              ''
+                cp -r ${self} source
+                chmod -R u+w source
+                make -C source compile-check | tee $out
+              '';
+
           format = pkgs.runCommand "helix-test-debug-format" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
             nixfmt --check ${self}/flake.nix | tee $out
           '';

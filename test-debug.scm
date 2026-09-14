@@ -25,6 +25,8 @@
 (require "helix/editor.scm")
 (require "helix/misc.scm")
 (require "helix/ext.scm")
+;; get-current-line-number lives with the static commands, not in misc.
+(require (only-in "helix/static.scm" get-current-line-number))
 (require-builtin helix/core/text as text.)
 (require-builtin steel/process)
 (require-builtin steel/strings)
