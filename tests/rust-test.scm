@@ -213,4 +213,50 @@
 (check-false! "compiler warnings on stdout do not derail parsing"
               (executable-from-cargo-output "warning: unused variable\nnot json at all\n"))
 
+
+;; diagnosis: what the first-run check reports
+(check-equal! "all checks passing reads as a count"
+              "2 checks passed"
+              (diagnosis (list (check "cargo" #t "install cargo")
+                               (check "template" #t "add the template"))))
+(check-equal! "failures carry their remedy"
+              "template: add the template"
+              (diagnosis (list (check "cargo" #t "install cargo")
+                               (check "template" #f "add the template"))))
+(check-equal! "several failures are joined"
+              "cargo: install cargo; template: add the template"
+              (diagnosis (list (check "cargo" #f "install cargo")
+                               (check "template" #f "add the template"))))
+(check-true! "ok when nothing failed"
+             (diagnosis-ok? (list (check "cargo" #t "x"))))
+(check-false! "not ok when something failed"
+              (diagnosis-ok? (list (check "cargo" #f "x"))))
+
+;; languages.toml inspection, shaped like the generated file
+(define languages-toml
+  (string-append
+   "[[language]]\n"
+   "name = \"rust\"\n"
+   "\n"
+   "[language-server.rust-analyzer]\n"
+   "command = \"rust-analyzer\"\n"
+   "\n"
+   "[language.debugger]\n"
+   "command = \"lldb-dap-rust\"\n"
+   "name = \"lldb-dap\"\n"
+   "transport = \"stdio\"\n"
+   "\n"
+   "[[language.debugger.templates]]\n"
+   "name = \"cargo test at line\"\n"))
+
+(check-true! "template is found by name"
+             (template-present? languages-toml "cargo test at line"))
+(check-false! "a template that is absent is reported absent"
+              (template-present? languages-toml "cargo test at cursor"))
+(check-equal! "adapter command comes from the debugger table, not a language server"
+              "lldb-dap-rust"
+              (debugger-command languages-toml))
+(check-false! "no debugger table means no adapter"
+              (debugger-command "[[language]]\nname = \"rust\"\n"))
+
 (finish!)

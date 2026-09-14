@@ -15,6 +15,7 @@ no test filter.
 | `:debug-test-again` | repeat the last one from any buffer |
 | `:debug-variables` | show the variables popup and keep it fresh |
 | `:debug-step-over` `:debug-step-in` `:debug-step-out` `:debug-continue` | step, then refresh that popup |
+| `:test-debug-doctor` | check everything it needs is in place, and say what to fix |
 
 The test is selected by its full path with `--exact`, so a name that is a
 prefix of another does not drag it along, and the build runs off the editor

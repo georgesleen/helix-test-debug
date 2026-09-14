@@ -29,7 +29,12 @@
          join-path
          path-within
          crate-root
-         executable-from-cargo-output)
+         executable-from-cargo-output
+         check
+         diagnosis
+         diagnosis-ok?
+         template-present?
+         debugger-command)
 
 ;; Tokens that may precede `fn` in a declaration. An extern ABI string is
 ;; handled separately because it is not a fixed spelling.
@@ -336,3 +341,21 @@
 
 (define (diagnosis-ok? checks)
   (empty? (filter (lambda (entry) (not (check-ok entry))) checks)))
+
+;; Whether a languages.toml names this debugger template.
+(define (template-present? text name)
+  (string-contains? text (string-append "\"" name "\"")))
+
+;; Adapter command a languages.toml configures, or #f. The first command
+;; after the debugger table is the adapter; the language servers above it
+;; have their own.
+(define (debugger-command text)
+  (let loop ([lines (source-lines text)] [in-debugger #f])
+    (cond [(empty? lines) #f]
+          [else
+           (let ([line (trim (car lines))])
+             (cond [(starts-with? line "[language.debugger]") (loop (cdr lines) #t)]
+                   [(and in-debugger (starts-with? line "command = "))
+                    (identifier-prefix-until (substring line 11 (string-length line)) #\")]
+                   [(and in-debugger (starts-with? line "[")) #f]
+                   [else (loop (cdr lines) in-debugger)]))])))

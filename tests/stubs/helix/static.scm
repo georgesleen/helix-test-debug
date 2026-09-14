@@ -2,7 +2,8 @@
 ;; See ../README.md. The dap_* statics are absent from the fork's static.scm
 ;; on disk because mod.rs appends their provides at runtime.
 
-(provide get-current-line-number
+(provide get-helix-scm-path
+         get-current-line-number
          dap_terminate
          dap_variables
          dap_next
@@ -10,6 +11,7 @@
          dap_step_out
          dap_continue)
 
+(define (get-helix-scm-path) "/tmp/helix.scm")
 (define (get-current-line-number) 0)
 (define (dap_terminate) void)
 (define (dap_variables) void)

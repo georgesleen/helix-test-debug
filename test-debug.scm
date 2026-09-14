@@ -14,6 +14,7 @@
 (require "helix/ext.scm")
 ;; The cursor line and the dap_* commands are static commands, not misc.
 (require (only-in "helix/static.scm"
+                  get-helix-scm-path
                   get-current-line-number
                   dap_terminate
                   dap_variables
@@ -33,7 +34,8 @@
          debug-step-over
          debug-step-in
          debug-step-out
-         debug-continue)
+         debug-continue
+         test-debug-doctor)
 
 ;; Debugger template this cog drives, taking the binary, the test filter,
 ;; the source file and the line to stop on. README.md carries the
@@ -277,3 +279,44 @@
 ;; Continue, refreshing the variables popup at the next stop.
 (define (debug-continue)
   (step-then-refresh! dap_continue))
+
+;; Contents of a file, or #f when it cannot be read.
+(define (file-contents path)
+  (if (path-exists? path)
+      (call-with-exception-handler (lambda (failure) #f)
+                                   (lambda () (call-with-input-file path read-port-to-string)))
+      #f))
+
+;; helix.scm sits in the configuration directory, so languages.toml is its
+;; sibling. There is no accessor for the directory itself.
+(define (languages-toml)
+  (file-contents (join-path (parent-directory (get-helix-scm-path)) "languages.toml")))
+
+(define (adapter-check configured)
+  (cond [(not configured)
+         (check "adapter" #f "languages.toml configures no debugger command for rust")]
+        [(which configured)
+         (check "adapter" #t "")]
+        [else (check "adapter" #f (string-append configured " is not on PATH"))]))
+
+(define (configuration-checks text)
+  (if (not text)
+      (list (check "languages.toml" #f "not found beside helix.scm; see the README"))
+      (list (check "template"
+                   (template-present? text *template*)
+                   (string-append "no \"" *template* "\" template; see the README"))
+            (adapter-check (debugger-command text)))))
+
+(define (cursor-checks)
+  (let ([request (request-at-cursor)])
+    (list (check "cursor" (not (string? request)) (if (string? request) request "")))))
+
+;;@doc
+;; Report whether everything debug-test needs is in place, and what to fix.
+(define (test-debug-doctor)
+  (let ([checks (append (list (check "cargo" (if (which "cargo") #t #f) "cargo is not on PATH"))
+                        (configuration-checks (languages-toml))
+                        (cursor-checks))])
+    (if (diagnosis-ok? checks)
+        (status! (diagnosis checks))
+        (fail! (diagnosis checks)))))
