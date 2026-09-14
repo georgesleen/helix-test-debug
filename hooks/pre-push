@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Local gate: the same checks CI runs. Keep it cheap.
+set -euo pipefail
+
+echo "[pre-push] format check..."
+nixfmt --check flake.nix
+
+echo "[pre-push] tests..."
+steel tests/rust-test.scm
+
+echo "[pre-push] all checks passed."
