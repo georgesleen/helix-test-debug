@@ -6,7 +6,8 @@
 (require "text.scm")
 
 (provide breakpoints->text
-         text->breakpoints)
+         text->breakpoints
+         toggle-breakpoint)
 
 ;; Breakpoints as one file:line per line, in the order given.
 (define (breakpoints->text breakpoints)
@@ -40,3 +41,16 @@
           [else
            (let ([breakpoint (text->breakpoint (trim (car lines)))])
              (loop (cdr lines) (if breakpoint (cons breakpoint found) found)))])))
+
+(define (same-breakpoint? breakpoint file line)
+  (and (equal? (car breakpoint) file) (equal? (car (cdr breakpoint)) line)))
+
+;; The list with a breakpoint added, or removed when it is already there.
+;; Removal drops every occurrence, so a hand-edited file cannot need two
+;; toggles to clear one breakpoint.
+(define (toggle-breakpoint breakpoints file line)
+  (let ([kept (filter (lambda (breakpoint) (not (same-breakpoint? breakpoint file line)))
+                      breakpoints)])
+    (if (equal? (length kept) (length breakpoints))
+        (append breakpoints (list (list file line)))
+        kept)))

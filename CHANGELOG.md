@@ -5,6 +5,11 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 
 ## Unreleased
 
+- `:debug-breakpoint` remembers a breakpoint in
+  `.helix/test-debug-breakpoints` under the workspace root, and it is placed
+  again on the first launch after a restart. `:debug-breakpoints` and
+  `:debug-breakpoints-clear` drive it by hand.
+
 - `:test-pick` picks a test from anywhere in the crate and debugs it: type
   to filter by subsequence, up and down to move, enter to debug. Rust only.
 - Removed the libtest `--list` parser. Discovery reads the sources instead,

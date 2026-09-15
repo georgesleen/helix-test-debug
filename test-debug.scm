@@ -19,6 +19,7 @@
                   get-current-line-number
                   dap_terminate
                   dap_variables
+                  dap_toggle_breakpoint
                   dap_next
                   dap_step_in
                   dap_step_out
@@ -51,6 +52,9 @@
          test-doctor
          test-debug-failure
          test-cancel
+         debug-breakpoint
+         debug-breakpoints
+         debug-breakpoints-clear
          debug-variables
          debug-step-over
          debug-step-in
@@ -249,6 +253,9 @@
 ;; where the test began.
 (define (launch! request binary file line)
   (terminate-existing!)
+  ;; Helix hands the adapter the breakpoints it holds when the session
+  ;; starts, so a remembered set has to be in place before this, not after.
+  (restore-breakpoints! (request-root request))
   (if (equal? (request-get request 'language) 'cpp)
       (helix.debug-start *binary-template*
                          binary
@@ -544,6 +551,141 @@
 ;; Continue, refreshing the variables popup at the next stop.
 (define (debug-continue)
   (step-then-refresh! dap_continue))
+
+;; Where a workspace's breakpoints live. Helix already keeps per-workspace
+;; configuration in .helix/, so this sits beside it rather than inventing a
+;; second convention or a state directory keyed on a hashed path.
+(define *breakpoint-directory* ".helix")
+(define *breakpoint-file* "test-debug-breakpoints")
+
+;; Workspaces whose breakpoints have been replayed into helix this session,
+;; so a second launch does not walk the files again.
+(define *restored* '())
+
+;; The workspace a path belongs to, whichever language it is, or #f.
+(define (workspace-root path)
+  (let ([crate (crate-root path path-exists?)])
+    (if crate crate (project-root path path-exists?))))
+
+(define (breakpoint-store root)
+  (join-path (join-path root *breakpoint-directory*) *breakpoint-file*))
+
+;; Breakpoints recorded for a workspace. A missing or corrupt file reads as
+;; none: losing breakpoints is a nuisance, refusing to debug is worse.
+(define (stored-breakpoints root)
+  (let ([text (file-contents (breakpoint-store root))])
+    (if (string? text) (text->breakpoints text) '())))
+
+;; Write the list back, creating .helix/ when it is the first breakpoint in
+;; a workspace. Returns whether it was written.
+(define (store-breakpoints! root breakpoints)
+  (call-with-exception-handler
+   (lambda (failure) #f)
+   (lambda ()
+     (let ([directory (join-path root *breakpoint-directory*)])
+       (when (not (path-exists? directory))
+         (create-directory! directory))
+       (call-with-output-file (breakpoint-store root)
+                              (lambda (port) (display (breakpoints->text breakpoints) port)))
+       #t))))
+
+(define (breakpoint-count-message count)
+  (string-append (number->string count)
+                 (if (equal? count 1) " breakpoint" " breakpoints")))
+
+;;@doc
+;; Toggle a breakpoint on the current line and remember it for this
+;; workspace, so it is still there next time the editor starts.
+(define (debug-breakpoint)
+  (let ([path (focused-path)])
+    (if (not (string? path))
+        (fail! "this buffer has no file on disk")
+        (let ([root (workspace-root path)]
+              [line (+ (get-current-line-number) 1)])
+          (dap_toggle_breakpoint)
+          (if (not root)
+              (status! (string-append "breakpoint set, but not remembered: no workspace above "
+                                      (base-name path)))
+              (let* ([relative (path-within root path)]
+                     [before (stored-breakpoints root)]
+                     [toggled (toggle-breakpoint before relative line)]
+                     [added (> (length toggled) (length before))])
+                (if (store-breakpoints! root toggled)
+                    (status! (string-append (if added "remembered " "forgot ")
+                                            relative
+                                            ":"
+                                            (number->string line)
+                                            ", "
+                                            (breakpoint-count-message (length toggled))
+                                            " in this workspace"))
+                    (fail! (string-append "could not write " (breakpoint-store root))))))))))
+
+;; Replay one breakpoint: helix only toggles at the cursor, so each file is
+;; opened and visited in turn.
+(define (replay-breakpoint! root breakpoint)
+  (let ([file (join-path root (car breakpoint))])
+    (when (path-exists? file)
+      (helix.open file)
+      (helix.goto-line (car (cdr breakpoint)))
+      (dap_toggle_breakpoint))))
+
+;; Replay every stored breakpoint, then return to where the cursor was.
+;; Returns how many were placed.
+(define (replay-breakpoints! root)
+  (let ([breakpoints (stored-breakpoints root)]
+        [was (focused-path)]
+        [line (+ (get-current-line-number) 1)])
+    (for-each (lambda (breakpoint) (replay-breakpoint! root breakpoint)) breakpoints)
+    (when (string? was)
+      (helix.open was)
+      (helix.goto-line line))
+    (length breakpoints)))
+
+;; Place a workspace's breakpoints once per session, before the first
+;; launch. Helix sends the breakpoints it holds when a session starts, so
+;; this has to happen before the adapter is asked to launch, not after.
+(define (restore-breakpoints! root)
+  (when (and root (not (member? root *restored*)))
+    (set! *restored* (cons root *restored*))
+    (let ([placed (replay-breakpoints! root)])
+      (when (> placed 0)
+        (status! (string-append "restored " (breakpoint-count-message placed)))))))
+
+;;@doc
+;; Place this workspace's remembered breakpoints in the editor, opening
+;; each file they are in and returning to where you were.
+(define (debug-breakpoints)
+  (let ([path (focused-path)])
+    (if (not (string? path))
+        (fail! "this buffer has no file on disk")
+        (let ([root (workspace-root path)])
+          (cond
+            [(not root) (fail! (string-append "no workspace above " (base-name path)))]
+            [(empty? (stored-breakpoints root))
+             (status! (string-append "no breakpoints remembered in " root))]
+            [else
+             (set! *restored* (cons root *restored*))
+             ;; The status comes after the replay: opening each file paints
+             ;; over whatever was on the line before.
+             (let ([placed (replay-breakpoints! root)])
+               (status! (string-append "restored "
+                                       (breakpoint-count-message placed)
+                                       " in "
+                                       root)))])))))
+
+;;@doc
+;; Forget this workspace's remembered breakpoints. Breakpoints already in
+;; the editor stay where they are.
+(define (debug-breakpoints-clear)
+  (let ([path (focused-path)])
+    (if (not (string? path))
+        (fail! "this buffer has no file on disk")
+        (let ([root (workspace-root path)])
+          (cond
+            [(not root) (fail! (string-append "no workspace above " (base-name path)))]
+            [(store-breakpoints! root '())
+             (status! (string-append "forgot every breakpoint in " root))]
+            [else (fail! (string-append "could not write " (breakpoint-store root)))])))))
 
 ;; Contents of a file, or #f when it cannot be read.
 (define (file-contents path)

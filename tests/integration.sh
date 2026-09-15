@@ -45,6 +45,10 @@ workdir=$(mktemp -d)
 config=$workdir/config
 ran_log=$workdir/ran.log
 session_pid_file=$workdir/session.pid
+# The cog stores breakpoints beside the crate it is debugging, so this one
+# lands in the fixture and is removed on the way out.
+breakpoint_store=$fixture/.helix/test-debug-breakpoints
+adapter_log=$workdir/adapter.jsonl
 
 # Pids under a process, deepest first. timeout(1) puts itself in its own
 # process group and script(1) gives helix its own session, so the pty tree
@@ -83,6 +87,7 @@ cleanup() {
     kill -9 "$pid" 2>/dev/null || true
   done
   rm -rf "$workdir"
+  rm -rf "$fixture/.helix"
 }
 trap cleanup EXIT
 
@@ -125,6 +130,8 @@ cat >"$config/helix/helix.scm" <<'EOF'
          test-again
          test-pick
          test-doctor
+         debug-breakpoint
+         debug-breakpoints
          test-debug-failure
          test-cancel
          debug-variables
@@ -136,14 +143,22 @@ EOF
 : >"$config/helix/init.scm"
 
 # The template the cog drives, as documented in README.md.
-cat >"$config/helix/languages.toml" <<'EOF'
+# The adapter is wrapped so the breakpoints helix sends at session start can
+# be read back. tee passes everything through untouched.
+cat >"$workdir/adapter.sh" <<EOF
+#!/usr/bin/env bash
+tee -a "$adapter_log" | lldb-dap "\$@"
+EOF
+chmod +x "$workdir/adapter.sh"
+
+cat >"$config/helix/languages.toml" <<EOF
 [[language]]
 name = "rust"
 
 [language.debugger]
 name = "lldb-dap"
 transport = "stdio"
-command = "lldb-dap"
+command = "$workdir/adapter.sh"
 
 [[language.debugger.templates]]
 name = "cargo test at line"
@@ -349,4 +364,52 @@ kill -9 "$tracer" 2>/dev/null || true
 kill -9 "$stopped" 2>/dev/null || true
 stop_session
 
-echo "integration-check: test-run, test-debug and test-pick work in helix"
+# :debug-breakpoint. A breakpoint set in one editor has to reach the adapter
+# in the next one, which is the whole point of storing it. Asserting the
+# store alone would pass even if nothing was ever placed in helix, so the
+# evidence is what helix sent the debugger: the wrapped adapter's log.
+rm -rf "$fixture/.helix"
+breakpoint_line=$((declaration + 2))
+bp_capture=$workdir/breakpoint.txt
+LINGER=10 DEADLINE=40 start_session "$bp_capture" ":$breakpoint_line" ":debug-breakpoint"
+
+waited=0
+while [[ ! -s $breakpoint_store ]]; do
+  sleep 1
+  waited=$((waited + 1))
+  if [[ $waited -gt 30 ]]; then
+    stop_session
+    fail "debug-breakpoint wrote no store in 30s" "$bp_capture"
+  fi
+done
+stop_session
+
+stored=$(cat "$breakpoint_store")
+if [[ $stored != "src/lib.rs:$breakpoint_line" ]]; then
+  fail "the store holds \"$stored\", not src/lib.rs:$breakpoint_line" "$bp_capture"
+fi
+
+echo "integration-check: debug-breakpoint remembered $stored"
+
+# A fresh editor: nothing is toggled by hand, so a breakpoint reaching the
+# adapter can only have come from the store.
+: >"$adapter_log"
+rm -f "$ran_log"
+restore_capture=$workdir/restore.txt
+LINGER=60 DEADLINE=90 start_session "$restore_capture" ":$declaration" ":test-debug"
+
+await_stopped "$restore_capture" "test-debug after a restore"
+
+sent=$(grep -o '"line":[0-9]*' "$adapter_log" | sort -u | tr '\n' ' ')
+case " $sent " in
+  *"\"line\":$breakpoint_line"*) ;;
+  *) fail "helix sent the adapter breakpoints [$sent], not line $breakpoint_line" "$restore_capture" ;;
+esac
+
+echo "integration-check: the remembered breakpoint reached the adapter as $sent"
+
+kill -9 "$tracer" 2>/dev/null || true
+kill -9 "$stopped" 2>/dev/null || true
+stop_session
+
+echo "integration-check: test-run, test-debug, test-pick and debug-breakpoint work in helix"

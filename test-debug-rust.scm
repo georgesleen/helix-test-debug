@@ -33,6 +33,7 @@
          source-lines
          template-present?
          text->breakpoints
+         toggle-breakpoint
          text-after
          breakpoint-line
          compiled-source?

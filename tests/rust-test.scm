@@ -406,6 +406,33 @@
               '()
               (text->breakpoints (breakpoints->text '())))
 
+;; toggle-breakpoint: what the editor does to the set it just read
+(check-equal! "a new breakpoint is appended, keeping the order set"
+              (list (list "src/a.rs" 1) (list "src/b.rs" 2))
+              (toggle-breakpoint (list (list "src/a.rs" 1)) "src/b.rs" 2))
+(check-equal! "toggling the same pair again removes it"
+              (list (list "src/a.rs" 1))
+              (toggle-breakpoint (list (list "src/a.rs" 1) (list "src/b.rs" 2)) "src/b.rs" 2))
+(check-equal! "removal leaves every other entry in place"
+              (list (list "src/a.rs" 1) (list "src/c.rs" 3))
+              (toggle-breakpoint (list (list "src/a.rs" 1) (list "src/b.rs" 2) (list "src/c.rs" 3))
+                                 "src/b.rs"
+                                 2))
+(check-equal! "the same line in another file is a different breakpoint"
+              (list (list "src/a.rs" 1) (list "src/b.rs" 1))
+              (toggle-breakpoint (list (list "src/a.rs" 1)) "src/b.rs" 1))
+(check-equal! "another line in the same file is a different breakpoint"
+              (list (list "src/a.rs" 1) (list "src/a.rs" 2))
+              (toggle-breakpoint (list (list "src/a.rs" 1)) "src/a.rs" 2))
+(check-equal! "a duplicate left by a hand edit clears in one toggle"
+              (list (list "src/b.rs" 2))
+              (toggle-breakpoint (list (list "src/a.rs" 1) (list "src/b.rs" 2) (list "src/a.rs" 1))
+                                 "src/a.rs"
+                                 1))
+(check-equal! "the first breakpoint in a workspace starts the list"
+              (list (list "src/a.rs" 1))
+              (toggle-breakpoint '() "src/a.rs" 1))
+
 ;; dirty-buffer-warning: what the user is told after an automatic write
 (check-equal! "the buffer name is reported unchanged"
               "saved src/analysis/signal.rs before building"

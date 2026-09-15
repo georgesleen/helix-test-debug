@@ -16,6 +16,9 @@ no test filter.
 | `:test-pick` | pick a test from anywhere in the crate and debug it |
 | `:test-again` | repeat the last one from any buffer |
 | `:test-cancel` | stop waiting on a build in flight |
+| `:debug-breakpoint` | toggle a breakpoint and remember it for this workspace |
+| `:debug-breakpoints` | place this workspace's remembered breakpoints |
+| `:debug-breakpoints-clear` | forget them |
 | `:test-doctor` | check everything it needs is in place, and say what to fix |
 | `:debug-variables` | show the variables popup and keep it fresh |
 | `:debug-step-over` `:debug-step-in` `:debug-step-out` `:debug-continue` | step, then refresh that popup |
@@ -62,7 +65,7 @@ which is what makes them dispatchable:
 
 ```scheme
 (require "cogs/test-debug.scm")
-(provide test-debug test-run test-pick test-again)
+(provide test-debug test-run test-pick test-again debug-breakpoint)
 ```
 
 ### With nix
@@ -200,6 +203,25 @@ Not yet: `:test-run` and `:test-debug-failure` are Rust only, since they read
 libtest's summary and panic line. Both say so rather than misreporting. A
 ctest command with more than one argument is refused, because a static
 template cannot take a variable argument list.
+
+## Remembered breakpoints
+
+`:debug-breakpoint` toggles a breakpoint the way Helix's own
+`dap_toggle_breakpoint` does, and additionally writes it to
+`.helix/test-debug-breakpoints` under the workspace root, one `file:line`
+per line with the path relative to the root. Helix keeps breakpoints for the
+session only; this survives a restart, and being relative it survives the
+checkout moving.
+
+They are placed again on the first launch in a workspace, before the adapter
+is asked to launch, because Helix hands over the breakpoints it holds at
+session start. `:debug-breakpoints` does it on demand. Placing them means
+visiting each file, since Helix can only toggle at the cursor, so the
+command opens those buffers and then returns to where you were.
+
+Toggling is done once per workspace per session. A second pass would toggle
+the same lines back off, and there is no way to ask Helix what breakpoints
+it already holds.
 
 ## Structure
 

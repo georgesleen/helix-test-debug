@@ -6,6 +6,7 @@
          get-current-line-number
          dap_terminate
          dap_variables
+         dap_toggle_breakpoint
          dap_next
          dap_step_in
          dap_step_out
@@ -15,6 +16,7 @@
 (define (get-current-line-number) 0)
 (define (dap_terminate) void)
 (define (dap_variables) void)
+(define (dap_toggle_breakpoint) void)
 (define (dap_next) void)
 (define (dap_step_in) void)
 (define (dap_step_out) void)

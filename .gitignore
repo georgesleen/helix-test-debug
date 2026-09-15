@@ -3,3 +3,4 @@ result-*
 .direnv/
 .compile-check/
 tests/fixture/target/
+tests/fixture/.helix/

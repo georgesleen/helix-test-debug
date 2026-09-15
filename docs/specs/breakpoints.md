@@ -26,3 +26,21 @@ with an integer line number.
   though `panic-location` will not produce one.
 - `(text->breakpoints (breakpoints->text bs))` returns `bs` for any list of
   pairs whose files contain no newline.
+
+## `(toggle-breakpoint breakpoints file line)`
+
+The list with that breakpoint added, or removed when it is already there.
+Toggling is what the editor does to a set it has just read from disk and is
+about to write back.
+
+- A breakpoint not in the list is appended, so the file stays in the order
+  breakpoints were set.
+- A breakpoint already in the list is removed, and every other entry keeps
+  its place.
+- A pair matches only when both file and line match: the same line in
+  another file, and another line in the same file, are untouched.
+- Every occurrence is removed if the list somehow holds a duplicate, so a
+  hand-edited file cannot need two toggles to clear one breakpoint.
+- Files are compared as given. Nothing normalises them, because the caller
+  is the only thing that knows whether it holds absolute or relative paths,
+  and mixing the two is its bug to avoid.

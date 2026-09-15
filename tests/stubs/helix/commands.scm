@@ -1,8 +1,12 @@
-;; Stub of helix's virtual helix/commands.scm module, for `make compile-check`.
-;; See ../README.md.
+;; Stub of helix's virtual helix/commands.scm module, for
+;; `make compile-check`. See ../README.md.
 
 (provide debug-start
-         write)
+         write
+         open
+         goto-line)
 
 (define (debug-start template . arguments) void)
 (define (write . arguments) void)
+(define (open . arguments) void)
+(define (goto-line line) void)
