@@ -26,6 +26,8 @@
 (require-builtin helix/core/text as text.)
 (require-builtin steel/process)
 (require-builtin steel/strings)
+(require-builtin steel/filesystem)
+(require (only-in "test-debug-picker.scm" pick-test!))
 (require "test-debug-rust.scm")
 (require (only-in "test-debug-cpp.scm"
                   test-macros
@@ -45,6 +47,7 @@
 (provide test-debug
          test-run
          test-again
+         test-pick
          test-doctor
          test-debug-failure
          test-cancel
@@ -371,6 +374,87 @@
   (cond [(job-running?) (fail! (string-append "already " *job-label*))]
         [*last-request* (debug-request! *last-request*)]
         [else (fail! "nothing debugged yet")]))
+
+;; Every test in the crate, read from its sources. Discovery walks the tree
+;; rather than asking cargo: a libtest binary can list its tests, but only
+;; once it is built, and the source carries the line to stop on that
+;; `--list` does not.
+(define (crate-tests root)
+  (let walk ([queue (list "")] [found '()])
+    (if (empty? queue)
+        found
+        (let* ([relative (car queue)]
+               [absolute (if (equal? relative "") root (join-path root relative))]
+               [children (directory-children absolute relative)])
+          (walk (append (cdr queue) (car children))
+                (append found (tests-of-files root (car (cdr children)))))))))
+
+;; Subdirectories worth descending into and files worth parsing, both as
+;; paths relative to the crate root. A directory cargo does not compile is
+;; never opened, which is what keeps target/ from being walked.
+(define (directory-children absolute relative)
+  (let loop ([entries (safe-read-dir absolute)] [directories '()] [files '()])
+    (if (empty? entries)
+        (list (reverse directories) (reverse files))
+        (let* ([entry (car entries)]
+               [name (base-name entry)]
+               [path (if (equal? relative "") name (string-append relative "/" name))])
+          (cond [(is-dir? entry)
+                 (loop (cdr entries)
+                       (if (walkable? path) (cons path directories) directories)
+                       files)]
+                [(compiled-source? path) (loop (cdr entries) directories (cons path files))]
+                [else (loop (cdr entries) directories files)])))))
+
+;; A directory is walked when it could still lead to compiled sources: a
+;; top-level one cargo compiles, or anything beneath one.
+(define (walkable? path)
+  (or (member? path '("src" "tests" "benches"))
+      (compiled-source? (string-append path "/lib.rs"))))
+
+(define (safe-read-dir path)
+  (call-with-exception-handler (lambda (failure) '())
+                               (lambda () (read-dir path))))
+
+(define (tests-of-files root paths)
+  (let loop ([remaining paths] [found '()])
+    (if (empty? remaining)
+        found
+        (let ([text (file-contents (join-path root (car remaining)))])
+          (loop (cdr remaining)
+                (if (string? text)
+                    (append found (tests-in-file (car remaining) (source-lines text)))
+                    found))))))
+
+;; Debug a test that was picked rather than pointed at. Everything the
+;; launch needs is in the entry, so no cursor is consulted.
+(define (debug-discovered! root entry)
+  (debug-request! (hash 'language 'rust
+                        'root root
+                        'relative-path (discovered-path entry)
+                        'file (base-name (discovered-path entry))
+                        'filter (discovered-name entry)
+                        'line (discovered-line entry))))
+
+;;@doc
+;; Pick a test from anywhere in the crate and debug it. Type to filter,
+;; up and down to move, enter to debug, escape to dismiss.
+(define (test-pick)
+  (let ([path (focused-path)])
+    (cond
+      [(not (string? path)) (fail! "this buffer has no file on disk")]
+      [(job-running?) (fail! (string-append "already " *job-label*))]
+      [(not (equal? (language-for path) 'rust))
+       (fail! "picking a test is rust only so far; use test-debug")]
+      [else
+       (let ([root (crate-root path path-exists?)])
+         (if (not root)
+             (fail! (string-append "no Cargo.toml above " (base-name path)))
+             (let ([entries (crate-tests root)])
+               (if (empty? entries)
+                   (fail! (string-append "no tests found under " root))
+                   (pick-test! entries
+                               (lambda (entry) (debug-discovered! root entry)))))))])))
 
 ;; Run the test, and when it fails debug it stopped where it panicked. The
 ;; panic path is reduced to a base name because that is what the adapter

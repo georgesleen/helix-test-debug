@@ -5,6 +5,11 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 
 ## Unreleased
 
+- `:test-pick` picks a test from anywhere in the crate and debugs it: type
+  to filter by subsequence, up and down to move, enter to debug. Rust only.
+- Removed the libtest `--list` parser. Discovery reads the sources instead,
+  which needs no build and yields the line to stop on.
+
 - C and C++ support for `:test-debug`, through CMake and ctest. Detection is
   a macro table covering GoogleTest, Catch2, doctest and Boost; ctest is the
   authority on which tests exist and how they are run.

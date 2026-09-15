@@ -11,6 +11,7 @@
 (require "test-debug/rust/cursor.scm")
 (require "test-debug/rust/names.scm")
 (require "test-debug/rust/cargo.scm")
+(require "test-debug/rust/discover.scm")
 
 (provide base-name
          breakpoints->text
@@ -34,6 +35,13 @@
          text->breakpoints
          text-after
          breakpoint-line
+         compiled-source?
+         discovered-line
+         discovered-name
+         discovered-path
+         discovery-summary
+         matching-tests-by-name
+         tests-in-file
          build-arguments
          declaration-name-at
          enclosing-modules
@@ -50,5 +58,4 @@
          test-attribute?
          test-declaration-line
          test-name
-         test-names-from-list
          test-outcome)

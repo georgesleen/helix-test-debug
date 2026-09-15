@@ -13,6 +13,7 @@ no test filter.
 | `:test-debug` | build and debug the test under the cursor |
 | `:test-run` | run it without a debugger and report the result |
 | `:test-debug-failure` | run it, and if it fails debug it stopped where it panicked |
+| `:test-pick` | pick a test from anywhere in the crate and debug it |
 | `:test-again` | repeat the last one from any buffer |
 | `:test-cancel` | stop waiting on a build in flight |
 | `:test-doctor` | check everything it needs is in place, and say what to fix |
@@ -61,7 +62,7 @@ which is what makes them dispatchable:
 
 ```scheme
 (require "cogs/test-debug.scm")
-(provide test-debug test-run test-again)
+(provide test-debug test-run test-pick test-again)
 ```
 
 ### With nix
@@ -217,13 +218,14 @@ test-debug/messages.scm      what the editor reports
 test-debug/rust/cursor.scm   finding the test under the cursor
 test-debug/rust/names.scm    the path libtest matches
 test-debug/rust/cargo.scm    invoking cargo, reading its output
+test-debug/rust/discover.scm every test in the crate
 ```
 
 Dependencies run one way: `text` and `paths` depend on nothing, `cursor` on
-`text`, `names` on `cursor`, `cargo` on `names`. Only the three modules under
-`rust/` know anything about Rust, so a second language adds a sibling
-directory and one dispatch, rather than an archaeology pass over a flat
-file.
+`text`, `names` on `cursor`, `cargo` and `discover` on `names`. Only the
+modules under `rust/` and `cpp/` know anything about a language, so a third
+one adds a sibling directory and one dispatch, rather than an archaeology
+pass over a flat file.
 
 `test-debug.scm` is the editor half: it reads the cursor, runs cargo on a
 spawned thread so the build does not freeze the editor, and polls from the
@@ -232,7 +234,14 @@ reporting: a callback queued from a worker thread is drained only when
 Helix's event loop wakes, so without a timer the session would not start
 until the next keypress.
 
-A second language would add its own pure half and one dispatch on file type.
+`test-debug-picker.scm` is the other editor-side file: the overlay
+`:test-pick` shows. It draws a list, reads keys, and hands the chosen test
+to a callback, so it knows nothing about building or launching.
+
+Picking reads the crate's sources rather than asking cargo what tests exist.
+A libtest binary can list its own tests, but only once it is built, and a
+picker that waits for a build is not a picker; the source also carries the
+line to stop on, which `--list` does not report.
 
 ## Tests
 
@@ -256,10 +265,13 @@ interpreter is not a faithful stand-in: `(void)` in tail position compiles
 under steel 0.8.2 *and* under the exact revision Helix pins, yet Helix's own
 engine rejects it. Building a matching interpreter does not close that gap.
 
-One gap remains. Steel compiles a function body lazily, so an error of that
-kind surfaces only when the path executes, which no load-time check reaches.
-Closing it needs a fixture crate and a debugger, driven through a real
-editor.
+`make integration-check` closes that gap: Steel compiles a function body
+lazily, so an error inside a command surfaces only when it runs. It drives
+`:test-run`, `:test-debug` and `:test-pick` in a real Helix against
+`tests/fixture`, and asserts what actually happened rather than what the
+screen said — the test the fixture recorded to a log, and a test binary
+stopped by a debugger in `/proc`. The picked test is deliberately not the
+one under the cursor, so the pick cannot be satisfied by the cursor path.
 
 ## Limitations
 

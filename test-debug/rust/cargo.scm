@@ -14,7 +14,6 @@
          panic-location
          run-arguments
          target-arguments
-         test-names-from-list
          test-outcome)
 
 ;; tests/foo.rs and tests/foo/main.rs are both target foo.
@@ -124,19 +123,3 @@
         #f
         (let ([found (panic-line-location (car lines))])
           (if found found (loop (cdr lines)))))))
-
-(define *test-suffix* ": test")
-
-;; Qualified test names from a libtest --list, in the order printed.
-;; Benchmarks and the trailing summary have no test suffix and drop out.
-(define (test-names-from-list output)
-  (let loop ([lines (source-lines output)] [found '()])
-    (cond [(empty? lines) (reverse found)]
-          [else
-           (let ([line (trim (car lines))])
-             (if (ends-with? line *test-suffix*)
-                 (loop (cdr lines)
-                       (cons (substring line 0 (- (string-length line)
-                                                  (string-length *test-suffix*)))
-                             found))
-                 (loop (cdr lines) found)))])))

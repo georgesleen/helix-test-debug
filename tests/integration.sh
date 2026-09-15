@@ -115,13 +115,15 @@ engine_error() {
 
 mkdir -p "$config/helix/cogs"
 cp "$cog_dir/test-debug.scm" "$cog_dir/test-debug-rust.scm" \
-   "$cog_dir/test-debug-cpp.scm" "$config/helix/cogs/"
+   "$cog_dir/test-debug-cpp.scm" "$cog_dir/test-debug-picker.scm" \
+   "$config/helix/cogs/"
 cp -r "$cog_dir/test-debug" "$config/helix/cogs/"
 cat >"$config/helix/helix.scm" <<'EOF'
 (require "cogs/test-debug.scm")
 (provide test-debug
          test-run
          test-again
+         test-pick
          test-doctor
          test-debug-failure
          test-cancel
@@ -262,40 +264,47 @@ fi
 
 echo "integration-check: test-run reported $outcome"
 
+# Wait for a test binary stopped by a debugger, which is what a started
+# session looks like from /proc. Sets $stopped, $tracer and $seen.
+await_stopped() {
+  local capture=$1
+  local label=$2
+  stopped=
+  tracer=
+  seen=
+  local waited=0
+  while [[ $waited -lt 60 ]]; do
+    for pid in $(pgrep -f "$binaries" 2>/dev/null || true); do
+      seen=$pid
+      state=$(awk '$1 == "State:" { print $2 }' "/proc/$pid/status" 2>/dev/null || true)
+      tracer=$(awk '$1 == "TracerPid:" { print $2 }' "/proc/$pid/status" 2>/dev/null || true)
+      if [[ $state == t && -n ${tracer:-} && $tracer != 0 ]]; then
+        stopped=$pid
+        return 0
+      fi
+    done
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  local raised
+  raised=$(engine_error "$capture")
+  if [[ -n $raised ]]; then
+    fail "$label raised: $raised" "$capture"
+  fi
+  if [[ -n $seen ]]; then
+    fail "$label left $binaries* running but never stopped by a debugger" "$capture"
+  fi
+  fail "$label started no debug session in 60s" "$capture"
+}
+
 # :test-debug. A started session means the test binary is alive and stopped
 # by the adapter, which is what /proc reports.
 debug_capture=$workdir/debug.txt
 rm -f "$ran_log"
 LINGER=60 DEADLINE=90 start_session "$debug_capture" ":$declaration" ":test-debug"
 
-stopped=
-tracer=
-seen=
-waited=0
-while [[ $waited -lt 60 ]]; do
-  for pid in $(pgrep -f "$binaries" 2>/dev/null || true); do
-    seen=$pid
-    state=$(awk '$1 == "State:" { print $2 }' "/proc/$pid/status" 2>/dev/null || true)
-    tracer=$(awk '$1 == "TracerPid:" { print $2 }' "/proc/$pid/status" 2>/dev/null || true)
-    if [[ $state == t && -n ${tracer:-} && $tracer != 0 ]]; then
-      stopped=$pid
-      break 2
-    fi
-  done
-  sleep 1
-  waited=$((waited + 1))
-done
-
-if [[ -z $stopped ]]; then
-  raised=$(engine_error "$debug_capture")
-  if [[ -n $raised ]]; then
-    fail "test-debug raised: $raised" "$debug_capture"
-  fi
-  if [[ -n $seen ]]; then
-    fail "test-debug left $binaries* running but never stopped by a debugger" "$debug_capture"
-  fi
-  fail "test-debug started no debug session in 60s" "$debug_capture"
-fi
+await_stopped "$debug_capture" test-debug
 
 command_line=$(tr '\0' ' ' <"/proc/$stopped/cmdline")
 status_line=$(grep -E '^(State|TracerPid):' "/proc/$stopped/status" | tr -s ' \t' ' ' | tr '\n' ' ')
@@ -316,4 +325,28 @@ kill -9 "$tracer" 2>/dev/null || true
 kill -9 "$stopped" 2>/dev/null || true
 stop_session
 
-echo "integration-check: test-run and test-debug work in helix"
+# :test-pick. The overlay is driven by typing: session.sh ends every key
+# with a carriage return, so one key sends the query and accepts it. The
+# test picked is deliberately not the one under the cursor, which is what
+# distinguishes this path from :test-debug.
+pick_path=${test_path}_negative_values
+pick_query=doubles_n
+pick_capture=$workdir/pick.txt
+rm -f "$ran_log"
+LINGER=60 DEADLINE=90 start_session "$pick_capture" ":test-pick" "$pick_query"
+
+await_stopped "$pick_capture" test-pick
+
+command_line=$(tr '\0' ' ' <"/proc/$stopped/cmdline")
+echo "integration-check: test-pick stopped pid $stopped running $command_line"
+
+case " $command_line " in
+  *" $pick_path "*) ;;
+  *) fail "test-pick launched $command_line, not $pick_path" "$pick_capture" ;;
+esac
+
+kill -9 "$tracer" 2>/dev/null || true
+kill -9 "$stopped" 2>/dev/null || true
+stop_session
+
+echo "integration-check: test-run, test-debug and test-pick work in helix"

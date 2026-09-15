@@ -362,46 +362,6 @@
 (check-false! "a non-numeric line is not a location"
               (panic-location "thread 'main' panicked at src/lib.rs:here:9:\n"))
 
-;; test-names-from-list: the names `--list` prints, which is what --exact
-;; has to match
-(define list-output
-  (string-append
-   "analysis::signal::tests::settles_when_tail_in_band: test\n"
-   "analysis::frequency::tests::verify_basic_equality: test\n"
-   "\n"
-   "2 tests, 0 benchmarks\n"))
-
-(define mixed-list-output
-  (string-append
-   "analysis::signal::tests::settles_when_tail_in_band: test\n"
-   "analysis::signal::benches::throughput: benchmark\n"
-   "analysis::frequency::tests::verify_basic_equality: test\n"
-   "\n"
-   "2 tests, 1 benchmark\n"))
-
-(check-equal! "names in the order printed, suffix removed"
-              '("analysis::signal::tests::settles_when_tail_in_band"
-                "analysis::frequency::tests::verify_basic_equality")
-              (test-names-from-list list-output))
-(check-equal! "benchmarks are excluded"
-              '("analysis::signal::tests::settles_when_tail_in_band"
-                "analysis::frequency::tests::verify_basic_equality")
-              (test-names-from-list mixed-list-output))
-(check-equal! "empty output lists nothing" '() (test-names-from-list ""))
-(check-equal! "output with no test lines lists nothing"
-              '()
-              (test-names-from-list "\n0 tests, 0 benchmarks\n"))
-(check-equal! "an unrecognised suffix is ignored"
-              '("tests::kept")
-              (test-names-from-list "tests::dropped: tests\ntests::kept: test\ntests::also_dropped\n"))
-(check-equal! "neither sorted nor deduplicated"
-              '("tests::zeta" "tests::alpha" "tests::zeta")
-              (test-names-from-list "tests::zeta: test\ntests::alpha: test\ntests::zeta: test\n"))
-;; Chosen reading: the suffix alone decides, so a name with spaces is kept.
-(check-equal! "a name containing spaces is still a name"
-              '("an integration case")
-              (test-names-from-list "an integration case: test\n"))
-
 ;; breakpoints->text: the on-disk form of the breakpoint list
 (check-equal! "the empty list writes nothing" "" (breakpoints->text '()))
 (check-equal! "one entry is terminated by a newline"
@@ -453,5 +413,180 @@
 (check-equal! "a name with spaces is not quoted or altered"
               "saved my crate/src/lib.rs before building"
               (dirty-buffer-warning "my crate/src/lib.rs"))
+
+;; compiled-source?: the paths under the crate root cargo compiles, which
+;; is what the picker is allowed to read
+(check-true! "library root" (compiled-source? "src/lib.rs"))
+(check-true! "nested library module" (compiled-source? "src/analysis/signal.rs"))
+(check-true! "integration test file" (compiled-source? "tests/skeleton.rs"))
+(check-true! "integration test directory" (compiled-source? "tests/skeleton/main.rs"))
+(check-true! "benchmark" (compiled-source? "benches/throughput.rs"))
+(check-false! "generated sources under target are not compiled"
+              (compiled-source? "target/debug/build/kitest-1a2b3c/out/generated.rs"))
+(check-false! "examples are not a compiled first segment"
+              (compiled-source? "examples/divider.rs"))
+(check-false! "a segment that merely starts with src" (compiled-source? "srcs/lib.rs"))
+(check-false! "src below another directory" (compiled-source? "crates/kitest/src/lib.rs"))
+(check-false! "a non-rust file beside the sources" (compiled-source? "src/notes.txt"))
+(check-false! "a file with no extension at all" (compiled-source? "src/Makefile"))
+(check-false! "the manifest beside the crate root" (compiled-source? "Cargo.toml"))
+(check-false! "a bare rust file has no module path" (compiled-source? "build.rs"))
+(check-false! "the first segment is case-sensitive" (compiled-source? "Src/lib.rs"))
+(check-false! "an upper-case test directory is a different directory"
+              (compiled-source? "TESTS/skeleton.rs"))
+;; Chosen reading: "comparison is exact" governs the extension as well, so
+;; a name a case-sensitive filesystem spells differently is not rust.
+(check-false! "the extension is case-sensitive" (compiled-source? "src/lib.RS"))
+
+;; tests-in-file: every test in one file, in declaration order. Entries are
+;; read through their accessors, so the checks do not depend on the shape
+;; an entry happens to have.
+(define (entry-fields entry)
+  (list (discovered-name entry) (discovered-path entry) (discovered-line entry)))
+
+(define (entry-names entries)
+  (map discovered-name entries))
+
+(define signal-tests (tests-in-file "src/analysis/signal.rs" lines))
+
+(check-equal! "the helper is not a test" 2 (length signal-tests))
+(check-equal! "the qualified name, the file, and the one-based body line"
+              (list "analysis::signal::tests::settles_when_tail_in_band"
+                    "src/analysis/signal.rs"
+                    10)
+              (entry-fields (list-ref signal-tests 0)))
+(check-equal! "an async test with a comment before its declaration still counts"
+              (list "analysis::signal::tests::reads_the_port" "src/analysis/signal.rs" 17)
+              (entry-fields (list-ref signal-tests 1)))
+(check-equal! "an integration file contributes no module prefix"
+              '("tests::settles_when_tail_in_band" "tests::reads_the_port")
+              (entry-names (tests-in-file "tests/skeleton.rs" lines)))
+(check-equal! "another attribute path ending in test counts"
+              '("cases::runs_on_the_runtime")
+              (entry-names
+               (tests-in-file "src/cases.rs"
+                              (source-lines (string-append
+                                             "#[async_std::test]\n"
+                                             "async fn runs_on_the_runtime() {\n"
+                                             "}\n")))))
+
+;; Two modules declaring the same test name, the second with an attribute,
+;; a blank line and a comment between `#[test]` and its declaration, and an
+;; untested function below it.
+(define two-module-source
+  (string-append
+   "mod alpha {\n"                                  ; 0
+   "    #[test]\n"                                  ; 1
+   "    fn shared() {\n"                            ; 2
+   "        assert!(true);\n"                       ; 3
+   "    }\n"                                        ; 4
+   "}\n"                                            ; 5
+   "\n"                                             ; 6
+   "mod beta {\n"                                   ; 7
+   "    #[test]\n"                                  ; 8
+   "    #[ignore]\n"                                ; 9
+   "\n"                                             ; 10
+   "    // the same name, a different module\n"     ; 11
+   "    fn shared() {\n"                            ; 12
+   "        assert!(true);\n"                       ; 13
+   "    }\n"                                        ; 14
+   "\n"                                             ; 15
+   "    fn untested() {\n"                          ; 16
+   "    }\n"                                        ; 17
+   "}\n"))                                          ; 18
+
+(check-equal! "same name in two modules, neither dropped"
+              (list (list "alpha::shared" "src/lib.rs" 4)
+                    (list "beta::shared" "src/lib.rs" 14))
+              (map entry-fields (tests-in-file "src/lib.rs" (source-lines two-module-source))))
+(check-equal! "no lines at all" '() (tests-in-file "src/lib.rs" '()))
+(check-equal! "a file whose functions are all untested"
+              '()
+              (tests-in-file "src/lib.rs" (source-lines "pub fn run() {\n}\n")))
+
+;; A test at the top of an integration file, whose name carries no `::`
+(define flat-source
+  (string-append
+   "#[test]\n"                                      ; 0
+   "fn divides_by_two() {\n"                        ; 1
+   "    assert!(true);\n"                           ; 2
+   "}\n"))                                          ; 3
+
+(define flat-tests (tests-in-file "tests/skeleton.rs" (source-lines flat-source)))
+
+(check-equal! "a test with no enclosing module is named by itself"
+              (list (list "divides_by_two" "tests/skeleton.rs" 3))
+              (map entry-fields flat-tests))
+
+(define mixed-case-tests
+  (tests-in-file "src/lib.rs"
+                 (source-lines (string-append
+                                "mod Cases {\n"
+                                "    #[test]\n"
+                                "    fn Settles() {\n"
+                                "    }\n"
+                                "}\n"))))
+
+;; matching-tests-by-name: the picker's filter, a subsequence match that
+;; leaves the order alone
+(check-equal! "the empty query selects every entry"
+              '("analysis::signal::tests::settles_when_tail_in_band"
+                "analysis::signal::tests::reads_the_port")
+              (entry-names (matching-tests-by-name "" signal-tests)))
+(check-equal! "characters in order, not necessarily adjacent"
+              '("analysis::signal::tests::settles_when_tail_in_band"
+                "analysis::signal::tests::reads_the_port")
+              (entry-names (matching-tests-by-name "anig" signal-tests)))
+(check-equal! "a subsequence no name contains as a substring"
+              '("analysis::signal::tests::reads_the_port")
+              (entry-names (matching-tests-by-name "sport" signal-tests)))
+(check-equal! "a query that selects one of the two"
+              '("analysis::signal::tests::reads_the_port")
+              (entry-names (matching-tests-by-name "port" signal-tests)))
+(check-equal! "an upper-case query against a lower-case name"
+              '("analysis::signal::tests::reads_the_port")
+              (entry-names (matching-tests-by-name "PORT" signal-tests)))
+(check-equal! "a lower-case query against an upper-case name"
+              '("Cases::Settles")
+              (entry-names (matching-tests-by-name "cases" mixed-case-tests)))
+(check-equal! "a pasted module path selects its tests"
+              '("analysis::signal::tests::settles_when_tail_in_band"
+                "analysis::signal::tests::reads_the_port")
+              (entry-names (matching-tests-by-name "signal::tests" signal-tests)))
+(check-equal! "colons are matched literally, not skipped"
+              '()
+              (entry-names (matching-tests-by-name "::" flat-tests)))
+(check-equal! "a query no name contains selects nothing"
+              '()
+              (entry-names (matching-tests-by-name "zzz" signal-tests)))
+;; The fixture declares its tests out of alphabetical order, so a filter
+;; that sorted would show up here.
+(check-equal! "order is the order of the entries"
+              '("analysis::signal::tests::settles_when_tail_in_band"
+                "analysis::signal::tests::reads_the_port")
+              (entry-names (matching-tests-by-name "s" signal-tests)))
+
+;; discovery-summary: the line above the list, worded so it reads without
+;; being parsed
+(check-equal! "an empty crate has nothing to filter"
+              "no tests found in this crate"
+              (discovery-summary "" '() 0))
+(check-equal! "zero total outranks a query"
+              "no tests found in this crate"
+              (discovery-summary "signal" '() 0))
+(check-equal! "no query is a plain count" "2 tests" (discovery-summary "" signal-tests 2))
+;; Deliberately not special-cased, so the line never has to be parsed.
+(check-equal! "one test is still tests" "1 tests" (discovery-summary "" flat-tests 1))
+(check-equal! "a filtering query names what is on screen"
+              "1 of 12 tests matching port"
+              (discovery-summary "port" (matching-tests-by-name "port" signal-tests) 12))
+;; Chosen reading: the plain count is for the empty query, so a query that
+;; happens to select everything is still filtering.
+(check-equal! "a query that filters nothing out still says which query"
+              "2 of 2 tests matching anig"
+              (discovery-summary "anig" (matching-tests-by-name "anig" signal-tests) 2))
+(check-equal! "a query that selects none of a non-empty crate"
+              "nothing matches zzz"
+              (discovery-summary "zzz" '() 12))
 
 (finish!)

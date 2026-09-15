@@ -12,7 +12,7 @@ test:
 compile-check:
 	rm -rf $(CHECK_DIR)
 	mkdir -p $(CHECK_DIR)
-	cp test-debug-rust.scm test-debug-cpp.scm $(CHECK_DIR)/
+	cp test-debug-rust.scm test-debug-cpp.scm test-debug-picker.scm $(CHECK_DIR)/
 	cp -r test-debug $(CHECK_DIR)/
 	cp -r tests/stubs/helix $(CHECK_DIR)/helix
 	sed 's|(require-builtin helix/core/text as text.)|(require (prefix-in text. "helix/text.scm"))|' \
