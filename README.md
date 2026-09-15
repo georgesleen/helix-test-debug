@@ -2,7 +2,7 @@
 
 Debug or run the Rust test under the cursor, in one keystroke.
 
-Put the cursor anywhere inside a `#[test]` function and run `:test-debug`. The
+Put the cursor anywhere inside a `#[test]` function and run `:debug-here`. The
 cog works out which cargo test target holds the file, builds it without running
 it, finds the binary cargo produced, and starts a Helix debug session stopped
 on the test's first line. Nothing is typed: no binary path, no hashed filename,
@@ -10,16 +10,16 @@ no test filter.
 
 | command | what it does |
 | --- | --- |
-| `:test-debug` | build and debug the test under the cursor, or the binary when the line is not in a test |
-| `:test-run` | run it without a debugger and report the result |
-| `:test-debug-failure` | run it, and if it fails debug it stopped where it panicked |
+| `:debug-here`, `:dbgh` | debug the line under the cursor: its test, or the crate's binary when the line is not in a test |
+| `:run-here` | run it without a debugger and report the result |
+| `:debug-failure` | run it, and if it fails debug it stopped where it panicked |
 | `:test-pick` | pick a test from anywhere in the crate and debug it |
-| `:test-again` | repeat the last one from any buffer |
-| `:test-cancel` | stop waiting on a build in flight |
+| `:debug-again` | repeat the last one from any buffer |
+| `:debug-cancel` | stop waiting on a build in flight |
 | `:debug-breakpoint` | toggle a breakpoint and remember it for this workspace |
 | `:debug-breakpoints` | place this workspace's remembered breakpoints |
 | `:debug-breakpoints-clear` | forget them |
-| `:test-doctor` | check everything it needs is in place, and say what to fix |
+| `:debug-doctor` | check everything it needs is in place, and say what to fix |
 | `:debug-variables` | show the variables popup and keep it fresh |
 | `:debug-step-over` `:debug-step-in` `:debug-step-out` `:debug-continue` | step, then refresh that popup |
 
@@ -65,7 +65,7 @@ which is what makes them dispatchable:
 
 ```scheme
 (require "cogs/test-debug.scm")
-(provide test-debug test-run test-pick test-again debug-breakpoint)
+(provide debug-here dbgh run-here test-pick debug-again debug-breakpoint)
 ```
 
 ### With nix
@@ -95,7 +95,7 @@ so the rest of the submenu survives. In `init.scm`:
 (require "helix/keymaps.scm")
 
 (add-global-keybinding
- (hash "normal" (hash "space" (hash "G" (hash "d" ":test-debug")))))
+ (hash "normal" (hash "space" (hash "G" (hash "d" ":debug-here")))))
 ```
 
 ## The debugger template
@@ -182,7 +182,7 @@ necessarily the `rustc` first on your `PATH`.
 
 ## C and C++
 
-`:test-debug` works in a `.c`, `.cc`, `.cpp`, `.cxx` or header buffer whose
+`:debug-here` works in a `.c`, `.cc`, `.cpp`, `.cxx` or header buffer whose
 project is CMake based, with a configured build directory (`build`,
 `cmake-build-debug` or `cmake-build-release`).
 
@@ -209,7 +209,7 @@ registered as `Suite.Name/0` still resolves.
 That needs the second template from `languages.toml`, `binary at line`; the
 flake exposes it as `lib.binaryDebuggerTemplate`.
 
-Not yet: `:test-run` and `:test-debug-failure` are Rust only, since they read
+Not yet: `:run-here` and `:debug-failure` are Rust only, since they read
 libtest's summary and panic line. Both say so rather than misreporting. A
 ctest command with more than one argument is refused, because a static
 template cannot take a variable argument list.
@@ -217,18 +217,38 @@ template cannot take a variable argument list.
 ## Lines that are not tests
 
 A breakpoint does not care whether the line is in a test, so when the cursor
-is not in one `:test-debug` builds the crate's binary and stops at the
+is not in one `:debug-here` builds the crate's binary and stops at the
 cursor itself rather than at the first line of a body. Nothing has to be
 marked; every line of a crate with a binary is debuggable.
 
-`:test-run` runs that binary and reports the last line it printed, and
-`:test-debug-failure` runs it and, if it panics, stops where it panicked.
+`:run-here` runs that binary and reports the last line it printed, and
+`:debug-failure` runs it and, if it panics, stops where it panicked.
 The launch needs the `program at line` template, which takes no filter.
 
 `src/bin/tool.rs` resolves to `--bin tool`; a cursor in library code or in
 `src/main.rs` leaves the target to cargo, so a package with several binaries
 resolves to whichever cargo reports first. C and C++ have no fallback: ctest
 knows tests, not programs, and the command says so rather than guessing.
+
+## PlatformIO and Unity
+
+`:debug-here` works in a PlatformIO project's `test/<folder>/` tree. Unity
+has no test attribute, so the cursor only names a candidate: a
+`RUN_TEST(name)` call anywhere in the same folder is what makes it a test,
+and the message says so when nothing does.
+
+PlatformIO's unit of execution is the folder, not the function, so there is
+no filter to pass. The folder's program is built, the breakpoint on the
+test's first line is what isolates it, and `:run-here` runs the whole folder
+and reports PlatformIO's summary.
+
+The environment comes from `platformio.ini`: one named `native` when there
+is one, since that is the build a local debugger can attach to, otherwise
+the first declared. The build is forced to carry debug info, because a
+`native` build has no `-g` and a breakpoint on it resolves to nothing while
+the program runs to completion. PlatformIO takes those flags only from the
+environment, so the build runs under `sh`, with values reaching it through
+`"$@"` rather than the script text.
 
 ## Remembered breakpoints
 
@@ -244,6 +264,20 @@ is asked to launch, because Helix hands over the breakpoints it holds at
 session start. `:debug-breakpoints` does it on demand. Placing them means
 visiting each file, since Helix can only toggle at the cursor, so the
 command opens those buffers and then returns to where you were.
+
+A workspace can cap how many are placed, which matters against hardware: an
+RP2040 has four breakpoint comparators per core and probe-rs programs them
+directly, so the fifth breakpoint fails the session rather than degrading.
+The cap belongs to the target rather than to the cog, so the store declares
+it as an optional line, and no line means no cap.
+
+```
+budget: 4
+src/main.rs:41
+```
+
+When the budget drops breakpoints the status line names the file that set
+the limit, because nothing else would tell you.
 
 Toggling is done once per workspace per session. A second pass would toggle
 the same lines back off, and there is no way to ask Helix what breakpoints
@@ -267,6 +301,11 @@ test-debug/rust/cursor.scm   finding the test under the cursor
 test-debug/rust/names.scm    the path libtest matches
 test-debug/rust/cargo.scm    invoking cargo, reading its output
 test-debug/rust/discover.scm every test in the crate
+test-debug/rust/binary.scm   building and running the crate's binary
+test-debug/cpp/cursor.scm    finding the C or C++ test under the cursor
+test-debug/cpp/ctest.scm     what ctest says a test is
+test-debug/cpp/unity.scm     finding the Unity test under the cursor
+test-debug/cpp/pio.scm       driving a PlatformIO project
 ```
 
 Dependencies run one way: `text` and `paths` depend on nothing, `cursor` on
@@ -315,7 +354,7 @@ engine rejects it. Building a matching interpreter does not close that gap.
 
 `make integration-check` closes that gap: Steel compiles a function body
 lazily, so an error inside a command surfaces only when it runs. It drives
-`:test-run`, `:test-debug` and `:test-pick` in a real Helix against
+`:run-here`, `:debug-here` and `:test-pick` in a real Helix against
 `tests/fixture`, and asserts what actually happened rather than what the
 screen said — the test the fixture recorded to a log, and a test binary
 stopped by a debugger in `/proc`. The picked test is deliberately not the

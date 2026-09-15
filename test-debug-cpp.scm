@@ -11,9 +11,27 @@
 (require "test-debug/messages.scm")
 (require "test-debug/cpp/cursor.scm")
 (require "test-debug/cpp/ctest.scm")
+(require "test-debug/cpp/unity.scm")
+(require "test-debug/cpp/pio.scm")
 
 (provide base-name
+         pio-build-arguments
+         pio-debug-build
+         pio-environment
+         pio-environments
+         pio-outcome
+         pio-program-path
+         pio-root
+         pio-run-arguments
+         pio-test-folder
+         run-test-names
+         unity-breakpoint-line
+         unity-function-at-line
+         unity-test-registered?
+         breakpoint-budget
          breakpoints->text
+         budget-report
+         within-budget
          check
          clamp-line
          crate-root

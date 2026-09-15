@@ -27,6 +27,9 @@ which it takes and which it returns.
 | [panic-location.md](panic-location.md) | where a failing test panicked |
 | [cpp-cursor-to-test.md](cpp-cursor-to-test.md) | finding the C or C++ test the cursor is in |
 | [ctest-discovery.md](ctest-discovery.md) | what ctest says a test is and how it runs |
+| [unity-cursor-to-test.md](unity-cursor-to-test.md) | finding the Unity test the cursor is in |
+| [pio-project.md](pio-project.md) | driving a PlatformIO project |
 | [breakpoints.md](breakpoints.md) | persisting breakpoints as text |
+| [breakpoint-budget.md](breakpoint-budget.md) | capping breakpoints for a target that has few |
 | [paths.md](paths.md) | path arithmetic and the crate root |
 | [diagnosis.md](diagnosis.md) | the setup check and its report |

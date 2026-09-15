@@ -37,13 +37,14 @@ cp test-debug.scm test-debug-rust.scm test-debug-cpp.scm test-debug-picker.scm \
 cp -r test-debug "$workdir/config/helix/cogs/"
 cat >"$workdir/config/helix/helix.scm" <<'EOF'
 (require "cogs/test-debug.scm")
-(provide test-debug
-         test-run
-         test-again
+(provide debug-here
+         dbgh
+         run-here
+         debug-again
          test-pick
-         test-doctor
-         test-debug-failure
-         test-cancel
+         debug-doctor
+         debug-failure
+         debug-cancel
          debug-variables
          debug-step-over
          debug-step-in

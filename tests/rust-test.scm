@@ -433,6 +433,102 @@
               (list (list "src/a.rs" 1))
               (toggle-breakpoint '() "src/a.rs" 1))
 
+;; breakpoint-budget: the limit a store declares, which the cog cannot know
+(check-false! "no header means no limit" (breakpoint-budget "src/a.rs:1\nsrc/b.rs:2\n"))
+(check-false! "an empty store declares nothing" (breakpoint-budget ""))
+(check-equal! "a header on its own line is the budget" 4 (breakpoint-budget "budget: 4\n"))
+(check-equal! "no space after the colon" 4 (breakpoint-budget "budget:4\n"))
+(check-equal! "spacing around the colon and the number is tolerated"
+              4
+              (breakpoint-budget "budget  :   4   \n"))
+(check-equal! "leading whitespace on the line is tolerated"
+              4
+              (breakpoint-budget "    budget: 4\n"))
+(check-false! "a word is not a budget" (breakpoint-budget "budget: four\n"))
+(check-false! "a fraction is not a budget" (breakpoint-budget "budget: 4.5\n"))
+(check-false! "a negative budget is a typo, not a limit" (breakpoint-budget "budget: -1\n"))
+(check-false! "a missing value is a typo, not a limit of zero"
+              (breakpoint-budget "budget:\n"))
+;; Zero is a limit, so a caller has to test for #f and not for falsiness.
+(check-equal! "zero is a valid budget" 0 (breakpoint-budget "budget: 0\n"))
+(check-true! "a budget of zero is distinguishable from no budget"
+             (not (equal? #f (breakpoint-budget "budget: 0\n"))))
+(check-equal! "only the first declaration counts"
+              2
+              (breakpoint-budget "budget: 2\nsrc/a.rs:1\nbudget: 5\n"))
+(check-equal! "a hand-edited file may declare it anywhere"
+              3
+              (breakpoint-budget "src/a.rs:1\nbudget: 3\nsrc/b.rs:2\n"))
+(check-false! "a malformed first declaration is still the declaration"
+              (breakpoint-budget "budget: x\nbudget: 4\nsrc/a.rs:1\n"))
+
+;; text->breakpoints: the header is not a breakpoint
+(check-equal! "a budget line is skipped and the rest still parse"
+              (list (list "src/a.rs" 1) (list "src/b.rs" 2))
+              (text->breakpoints "budget: 4\nsrc/a.rs:1\nsrc/b.rs:2\n"))
+(check-equal! "a budget line between breakpoints is skipped too"
+              (list (list "src/a.rs" 1) (list "src/b.rs" 2))
+              (text->breakpoints "src/a.rs:1\nbudget: 4\nsrc/b.rs:2\n"))
+
+;; breakpoints->text with a budget: a host store never grows a header
+(check-equal! "no budget writes what the one-argument form wrote"
+              "src/zeta.rs:9\nsrc/alpha.rs:1\n"
+              (breakpoints->text (list (list "src/zeta.rs" 9) (list "src/alpha.rs" 1)) #f))
+(check-equal! "no budget and no breakpoints writes nothing"
+              ""
+              (breakpoints->text '() #f))
+(check-equal! "a budget is written first, then the breakpoints"
+              "budget: 4\nsrc/zeta.rs:9\nsrc/alpha.rs:1\n"
+              (breakpoints->text (list (list "src/zeta.rs" 9) (list "src/alpha.rs" 1)) 4))
+(check-equal! "a budget of zero is still written"
+              "budget: 0\n"
+              (breakpoints->text '() 0))
+
+;; Both halves of the round trip, since the store is read back by two
+;; different functions.
+(check-equal! "writing with a budget still returns the same pairs"
+              breakpoints
+              (text->breakpoints (breakpoints->text breakpoints 4)))
+(check-equal! "the budget survives the round trip"
+              4
+              (breakpoint-budget (breakpoints->text breakpoints 4)))
+(check-equal! "a budget of zero survives the round trip"
+              0
+              (breakpoint-budget (breakpoints->text breakpoints 0)))
+(check-equal! "the pairs survive a budget of zero"
+              breakpoints
+              (text->breakpoints (breakpoints->text breakpoints 0)))
+(check-false! "no budget round trips as no budget"
+              (breakpoint-budget (breakpoints->text breakpoints #f)))
+(check-equal! "the empty list round trips with a budget"
+              '()
+              (text->breakpoints (breakpoints->text '() 4)))
+
+;; within-budget: which breakpoints the editor gets to place
+(check-equal! "no budget places all of them"
+              breakpoints
+              (within-budget breakpoints #f))
+(check-equal! "the first of them, in the order they were set"
+              (list (list "src/a.rs" 1) (list "src/b.rs" 2))
+              (within-budget (list (list "src/a.rs" 1) (list "src/b.rs" 2) (list "src/c.rs" 3)) 2))
+(check-equal! "a budget of zero places nothing"
+              '()
+              (within-budget (list (list "src/a.rs" 1)) 0))
+(check-equal! "fewer than the budget is not padded"
+              (list (list "src/a.rs" 1))
+              (within-budget (list (list "src/a.rs" 1)) 4))
+(check-equal! "nothing to place fits any budget" '() (within-budget '() 4))
+
+;; budget-report: a report that always fires is noise
+(check-false! "no budget, no report" (budget-report 7 7 #f))
+(check-false! "nothing dropped, no report" (budget-report 4 4 4))
+(check-equal! "the report names the count and the file that set the limit"
+              "placed 4 of 7, the budget in .helix/test-debug-breakpoints is 4"
+              (budget-report 4 7 4))
+(check-equal! "a budget of zero drops everything and says so"
+              "placed 0 of 3, the budget in .helix/test-debug-breakpoints is 0"
+              (budget-report 0 3 0))
+
 ;; dirty-buffer-warning: what the user is told after an automatic write
 (check-equal! "the buffer name is reported unchanged"
               "saved src/analysis/signal.rs before building"

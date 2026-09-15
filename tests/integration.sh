@@ -125,15 +125,16 @@ cp "$cog_dir/test-debug.scm" "$cog_dir/test-debug-rust.scm" \
 cp -r "$cog_dir/test-debug" "$config/helix/cogs/"
 cat >"$config/helix/helix.scm" <<'EOF'
 (require "cogs/test-debug.scm")
-(provide test-debug
-         test-run
-         test-again
+(provide debug-here
+         dbgh
+         run-here
+         debug-again
          test-pick
-         test-doctor
+         debug-doctor
          debug-breakpoint
          debug-breakpoints
-         test-debug-failure
-         test-cancel
+         debug-failure
+         debug-cancel
          debug-variables
          debug-step-over
          debug-step-in
@@ -170,6 +171,24 @@ completion = [
   { name = "line" },
 ]
 args = { program = "{0}", args = [ "{1}", "--exact", "--include-ignored", "--test-threads=1", "--nocapture" ], preRunCommands = [ "breakpoint set --file {2} --line {3}" ] }
+
+[[language.debugger.templates]]
+name = "program at line"
+request = "launch"
+completion = [
+  { name = "binary", completion = "filename" },
+  { name = "source file" },
+  { name = "line" },
+]
+args = { program = "{0}", preRunCommands = [ "breakpoint set --file {1} --line {2}" ] }
+
+[[language]]
+name = "c"
+
+[language.debugger]
+name = "lldb-dap"
+transport = "stdio"
+command = "lldb-dap"
 
 [[language.debugger.templates]]
 name = "program at line"
@@ -240,12 +259,12 @@ start_session() {
   done
 }
 
-# :test-run. Two things have to happen: the right test runs, which the
+# :run-here. Two things have to happen: the right test runs, which the
 # fixture records to $FIXTURE_TEST_LOG, and the command reports its result
 # on the statusline, which is the only place a raised error would stop it.
 run_capture=$workdir/run.txt
 rm -f "$ran_log"
-LINGER=40 DEADLINE=70 start_session "$run_capture" ":$declaration" ":test-run"
+LINGER=40 DEADLINE=70 start_session "$run_capture" ":$declaration" ":run-here"
 
 waited=0
 while [[ ! -s $ran_log ]]; do
@@ -253,7 +272,7 @@ while [[ ! -s $ran_log ]]; do
   waited=$((waited + 1))
   if [[ $waited -gt 45 ]]; then
     stop_session
-    fail "test-run ran no test in 45s" "$run_capture"
+    fail "run-here ran no test in 45s" "$run_capture"
   fi
 done
 
@@ -272,22 +291,22 @@ stop_session
 if [[ -z $outcome ]]; then
   raised=$(engine_error "$run_capture")
   if [[ -n $raised ]]; then
-    fail "test-run raised: $raised" "$run_capture"
+    fail "run-here raised: $raised" "$run_capture"
   fi
-  fail "test-run put no test result on the statusline in 30s" "$run_capture"
+  fail "run-here put no test result on the statusline in 30s" "$run_capture"
 fi
 
 ran=$(sort "$ran_log")
 if [[ $ran != "$test_path" ]]; then
-  fail "test-run should have run exactly $test_path, ran:
+  fail "run-here should have run exactly $test_path, ran:
 $ran" "$run_capture"
 fi
 
 if [[ $outcome != "test result: ok. 1 passed;" ]]; then
-  fail "test-run reported \"$outcome\", not one passing test" "$run_capture"
+  fail "run-here reported \"$outcome\", not one passing test" "$run_capture"
 fi
 
-echo "integration-check: test-run reported $outcome"
+echo "integration-check: run-here reported $outcome"
 
 # Wait for a test binary stopped by a debugger, which is what a started
 # session looks like from /proc. Sets $stopped, $tracer and $seen.
@@ -323,17 +342,17 @@ await_stopped() {
   fail "$label started no debug session in 60s" "$capture"
 }
 
-# :test-debug. A started session means the test binary is alive and stopped
+# :debug-here. A started session means the test binary is alive and stopped
 # by the adapter, which is what /proc reports.
 debug_capture=$workdir/debug.txt
 rm -f "$ran_log"
-LINGER=60 DEADLINE=90 start_session "$debug_capture" ":$declaration" ":test-debug"
+LINGER=60 DEADLINE=90 start_session "$debug_capture" ":$declaration" ":debug-here"
 
-await_stopped "$debug_capture" test-debug
+await_stopped "$debug_capture" debug-here
 
 command_line=$(tr '\0' ' ' <"/proc/$stopped/cmdline")
 status_line=$(grep -E '^(State|TracerPid):' "/proc/$stopped/status" | tr -s ' \t' ' ' | tr '\n' ' ')
-echo "integration-check: test-debug stopped pid $stopped ($status_line) running $command_line"
+echo "integration-check: debug-here stopped pid $stopped ($status_line) running $command_line"
 
 for expected in "$test_path" --exact --include-ignored; do
   case " $command_line " in
@@ -353,7 +372,7 @@ stop_session
 # :test-pick. The overlay is driven by typing: session.sh ends every key
 # with a carriage return, so one key sends the query and accepts it. The
 # test picked is deliberately not the one under the cursor, which is what
-# distinguishes this path from :test-debug.
+# distinguishes this path from :debug-here.
 pick_path=${test_path}_negative_values
 pick_query=doubles_n
 pick_capture=$workdir/pick.txt
@@ -406,9 +425,9 @@ echo "integration-check: debug-breakpoint remembered $stored"
 : >"$adapter_log"
 rm -f "$ran_log"
 restore_capture=$workdir/restore.txt
-LINGER=60 DEADLINE=90 start_session "$restore_capture" ":$declaration" ":test-debug"
+LINGER=60 DEADLINE=90 start_session "$restore_capture" ":$declaration" ":debug-here"
 
-await_stopped "$restore_capture" "test-debug after a restore"
+await_stopped "$restore_capture" "debug-here after a restore"
 
 sent=$(grep -o '"line":[0-9]*' "$adapter_log" | sort -u | tr '\n' ' ')
 case " $sent " in
@@ -422,7 +441,7 @@ kill -9 "$tracer" 2>/dev/null || true
 kill -9 "$stopped" 2>/dev/null || true
 stop_session
 
-# :test-debug on a line that is not in a test. The crate's own binary is
+# :debug-here on a line that is not in a test. The crate's own binary is
 # what has to be stopped, not a test binary, so the assertion is on which
 # executable the debugger is holding.
 program_capture=$workdir/program.txt
@@ -437,12 +456,12 @@ program_line=$(grep -n "let value" "$fixture/src/main.rs" | cut -d: -f1)
 # process to wait for is the binary rather than a test binary.
 export SOURCE_FILE=$fixture/src/main.rs
 binaries=$program_binary
-LINGER=60 DEADLINE=90 start_session "$program_capture" ":$program_line" ":test-debug"
+LINGER=60 DEADLINE=90 start_session "$program_capture" ":$program_line" ":debug-here"
 
-await_stopped "$program_capture" "test-debug on a binary"
+await_stopped "$program_capture" "debug-here on a binary"
 
 command_line=$(tr '\0' ' ' <"/proc/$stopped/cmdline")
-echo "integration-check: test-debug on a non-test line stopped $command_line"
+echo "integration-check: debug-here on a non-test line stopped $command_line"
 
 case " $command_line " in
   *" $program_binary "*) ;;
@@ -458,4 +477,42 @@ kill -9 "$tracer" 2>/dev/null || true
 kill -9 "$stopped" 2>/dev/null || true
 stop_session
 
-echo "integration-check: tests, the picker, breakpoints and the binary path work in helix"
+# :debug-here in a PlatformIO project. Unity marks nothing, so this proves
+# the whole chain: the cursor names a function, a RUN_TEST call in the
+# folder is what makes it a test, pio builds that folder's program with
+# debug info forced on, and the breakpoint stops it. Skipped when pio is
+# missing or its core directory has no native platform, because a cold one
+# needs the network.
+if ! command -v pio >/dev/null; then
+  echo "integration-check: no pio on PATH, skipping the PlatformIO phase"
+elif [[ ! -d ${PLATFORMIO_CORE_DIR:-$HOME/.platformio}/platforms/native ]]; then
+  echo "integration-check: PlatformIO has no native platform installed, skipping"
+else
+  pio_fixture=$root/tests/pio-fixture
+  pio_program=$pio_fixture/.pio/build/native/program
+  pio_source=$pio_fixture/test/test_divider/test_divider.c
+  pio_line=$(grep -n "^void test_halves(void)" "$pio_source" | cut -d: -f1)
+  [[ -n $pio_line ]] || fail "no test_halves definition in $pio_source"
+
+  pio_capture=$workdir/pio.txt
+  export SOURCE_FILE=$pio_source
+  binaries=$pio_program
+  fixture=$pio_fixture
+  LINGER=60 DEADLINE=90 start_session "$pio_capture" ":$pio_line" ":debug-here"
+
+  await_stopped "$pio_capture" "debug-here in a PlatformIO project"
+
+  command_line=$(tr '\0' ' ' <"/proc/$stopped/cmdline")
+  echo "integration-check: debug-here stopped the Unity program $command_line"
+
+  case " $command_line " in
+    *" $pio_program "*) ;;
+    *) fail "the stopped process is $command_line, not $pio_program" "$pio_capture" ;;
+  esac
+
+  kill -9 "$tracer" 2>/dev/null || true
+  kill -9 "$stopped" 2>/dev/null || true
+  stop_session
+fi
+
+echo "integration-check: tests, the picker, breakpoints, the binary path and PlatformIO work in helix"

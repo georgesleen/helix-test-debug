@@ -471,4 +471,246 @@
 (check-false! "no CMakeLists anywhere above"
               (project-root "/w/project/src/math_test.cpp" (files-at)))
 
+;; A Unity translation unit shaped like the real thing: the fixture hooks,
+;; a prototype above every definition, tests with the brace in both
+;; places, and a runner whose registrations include a commented-out one.
+(define unity-source
+  (string-append
+   "#include \"unity.h\"\n"                       ; 0
+   "#include \"divider.h\"\n"                     ; 1
+   "\n"                                           ; 2
+   "void test_divider_rounds(void);\n"            ; 3
+   "\n"                                           ; 4
+   "void setUp(void) {\n"                         ; 5
+   "  divider_init();\n"                          ; 6
+   "}\n"                                          ; 7
+   "\n"                                           ; 8
+   "void tearDown(void)\n"                        ; 9
+   "{\n"                                          ; 10
+   "  divider_reset();\n"                         ; 11
+   "}\n"                                          ; 12
+   "\n"                                           ; 13
+   "void test_divider_halves(void) {\n"           ; 14
+   "  TEST_ASSERT_EQUAL_INT(2, divide(4, 2));\n"  ; 15
+   "}\n"                                          ; 16
+   "\n"                                           ; 17
+   "static void test_divider_by_zero(void)\n"     ; 18
+   "{\n"                                          ; 19
+   "  TEST_ASSERT_EQUAL_INT(0, divide(4, 0));\n"  ; 20
+   "}\n"                                          ; 21
+   "\n"                                           ; 22
+   "int main(void) {\n"                           ; 23
+   "  UNITY_BEGIN();\n"                           ; 24
+   "  RUN_TEST(test_divider_halves);\n"           ; 25
+   "  RUN_TEST(test_divider_by_zero);\n"          ; 26
+   "  // RUN_TEST(test_divider_rounds);\n"        ; 27
+   "  return UNITY_END();\n"                      ; 28
+   "}\n"))                                        ; 29
+
+(define unity-lines (source-lines unity-source))
+
+;; unity-function-at-line: naming the function the cursor sits in, since
+;; Unity has no attribute to match
+(check-equal! "cursor on a test's declaration line"
+              (list "test_divider_halves" 14)
+              (unity-function-at-line unity-lines 14))
+(check-equal! "cursor inside the body finds the same function"
+              (list "test_divider_halves" 14)
+              (unity-function-at-line unity-lines 15))
+(check-equal! "cursor on the closing brace finds the same function"
+              (list "test_divider_halves" 14)
+              (unity-function-at-line unity-lines 16))
+;; A test may be file-local, so the storage class cannot hide the name.
+(check-equal! "cursor on a static test's declaration line"
+              (list "test_divider_by_zero" 18)
+              (unity-function-at-line unity-lines 18))
+(check-equal! "cursor on the brace below a static declaration"
+              (list "test_divider_by_zero" 18)
+              (unity-function-at-line unity-lines 19))
+(check-equal! "cursor inside a static test's body"
+              (list "test_divider_by_zero" 18)
+              (unity-function-at-line unity-lines 20))
+(check-equal! "cursor on a static test's closing brace"
+              (list "test_divider_by_zero" 18)
+              (unity-function-at-line unity-lines 21))
+(check-equal! "the fixture hooks are ordinary functions too"
+              (list "setUp" 5)
+              (unity-function-at-line unity-lines 6))
+(check-equal! "a hook whose brace sits on its own line"
+              (list "tearDown" 9)
+              (unity-function-at-line unity-lines 11))
+;; Every definition above the cursor is a candidate, so the search has to
+;; stop at the first one it reaches going up.
+(check-equal! "the nearest definition at or above the cursor wins"
+              (list "main" 23)
+              (unity-function-at-line unity-lines 24))
+;; A registration names a function without declaring one, so the cursor a
+;; user puts on the line they can see finds the runner.
+(check-equal! "cursor on a registration finds the enclosing main"
+              (list "main" 23)
+              (unity-function-at-line unity-lines 25))
+(check-equal! "cursor on a commented-out registration finds main too"
+              (list "main" 23)
+              (unity-function-at-line unity-lines 27))
+;; `return UNITY_END();` reads like a return type, a name and a
+;; parenthesis, and only the trailing semicolon rules it out.
+(check-equal! "a call ending in a semicolon does not declare anything"
+              (list "main" 23)
+              (unity-function-at-line unity-lines 28))
+(check-false! "cursor on a prototype above every definition"
+              (unity-function-at-line unity-lines 3))
+(check-false! "cursor below that prototype is still above the first definition"
+              (unity-function-at-line unity-lines 4))
+(check-false! "cursor above the first definition" (unity-function-at-line unity-lines 0))
+(check-false! "no lines hold no function" (unity-function-at-line '() 0))
+;; Chosen reading: the #f cases are no lines and a cursor above the first
+;; definition, and nothing stops the upward search at a closing brace, so
+;; a cursor in the gap between two functions reports the one above it.
+(check-equal! "cursor in the gap between two functions reports the one above"
+              (list "test_divider_halves" 14)
+              (unity-function-at-line unity-lines 17))
+
+;; A prototype inside a body must not out-rank the definition enclosing it.
+(define local-prototype-lines
+  (list "void test_local_prototype(void) {"  ; 0
+        "  void divider_reset(void);"        ; 1
+        "  TEST_ASSERT_EQUAL_INT(1, 1);"     ; 2
+        "}"))                                ; 3
+
+(check-equal! "a prototype between the declaration and the cursor is not a definition"
+              (list "test_local_prototype" 0)
+              (unity-function-at-line local-prototype-lines 2))
+
+;; The name is the token before the parenthesis whatever precedes it.
+(check-equal! "extern before the return type is skipped"
+              (list "test_extern_linkage" 0)
+              (unity-function-at-line (list "extern void test_extern_linkage(void) {"
+                                            "  TEST_ASSERT_EQUAL_INT(1, 1);"
+                                            "}")
+                                      1))
+(check-equal! "several qualifiers before the name are skipped"
+              (list "helper_count" 0)
+              (unity-function-at-line (list "static unsigned int helper_count(void) {"
+                                            "  return 0;"
+                                            "}")
+                                      1))
+(check-equal! "leading whitespace on the declaration is ignored"
+              (list "test_indented" 0)
+              (unity-function-at-line (list "  static void test_indented(void) {"
+                                            "    TEST_ASSERT_EQUAL_INT(1, 1);"
+                                            "  }")
+                                      1))
+
+;; run-test-names: the authority on what is a test lives in the runner
+(check-equal! "every registration in the order registered"
+              '("test_divider_halves" "test_divider_by_zero" "test_divider_rounds")
+              (run-test-names unity-lines))
+(check-equal! "whitespace inside the invocation is allowed"
+              '("test_x")
+              (run-test-names (list "  RUN_TEST ( test_x ) ;")))
+;; Deliberate: telling a real call from a comment needs a parser, and the
+;; cost of the false positive is a test that will not run.
+(check-equal! "a commented-out registration is still reported"
+              '("test_skipped")
+              (run-test-names (list "  // RUN_TEST(test_skipped);")))
+(check-equal! "a registration in a block comment is reported too"
+              '("test_skipped")
+              (run-test-names (list "  /* RUN_TEST(test_skipped); */")))
+(check-equal! "several registrations on one line are all reported"
+              '("test_a" "test_b")
+              (run-test-names (list "  RUN_TEST(test_a); RUN_TEST(test_b);")))
+;; A name registered twice is a fact about the file.
+(check-equal! "duplicates are kept"
+              '("test_a" "test_a")
+              (run-test-names (list "  RUN_TEST(test_a);" "  RUN_TEST(test_a);")))
+(check-equal! "order is the order of registration, unsorted"
+              '("test_zeta" "test_alpha" "test_middle")
+              (run-test-names (list "  RUN_TEST(test_zeta);"
+                                    "  RUN_TEST(test_alpha);"
+                                    "  RUN_TEST(test_middle);")))
+;; The macro name has to be exactly RUN_TEST, or every wrapper and every
+;; longer spelling registers a test the runner never runs.
+(check-equal! "a longer spelling is not RUN_TEST"
+              '()
+              (run-test-names (list "  RUN_TEST_CASE(test_x);")))
+(check-equal! "a parameterized spelling is not RUN_TEST"
+              '()
+              (run-test-names (list "  RUN_TEST_P(test_x);")))
+(check-equal! "a wrapper macro ending in RUN_TEST is not RUN_TEST"
+              '()
+              (run-test-names (list "  MY_RUN_TEST(test_x);")))
+(check-equal! "a source registering nothing yields the empty list"
+              '()
+              (run-test-names (list "int main(void) {" "  return UNITY_END();" "}")))
+(check-equal! "no lines register nothing" '() (run-test-names '()))
+
+(define unity-registrations (run-test-names unity-lines))
+
+;; unity-test-registered?: the candidate checked against the runner
+(check-true! "a registered name is a test"
+             (unity-test-registered? "test_divider_halves" unity-registrations))
+(check-true! "a name registered only in a comment still counts"
+             (unity-test-registered? "test_divider_rounds" unity-registrations))
+(check-false! "a fixture hook is not a test"
+              (unity-test-registered? "setUp" unity-registrations))
+(check-false! "the runner itself is not a test"
+              (unity-test-registered? "main" unity-registrations))
+(check-true! "a name among several registrations"
+             (unity-test-registered? "test_x" '("test_a" "test_x" "test_b")))
+;; No prefix is stripped, either way round, or the debugger runs a sibling.
+(check-false! "a registration extending the name is not a match"
+              (unity-test-registered? "test_x" '("test_x_again")))
+(check-false! "a name extending the registration is not a match"
+              (unity-test-registered? "test_x_again" '("test_x")))
+(check-false! "C is case-sensitive" (unity-test-registered? "Test_X" '("test_x")))
+(check-false! "an unbuilt project registers nothing"
+              (unity-test-registered? "test_divider_halves" '()))
+
+;; unity-breakpoint-line: one based, and the brace may be in either place
+(check-equal! "the brace on the declaration line puts the body one line down"
+              16
+              (unity-breakpoint-line 14 unity-lines))
+(check-equal! "the brace on its own line puts the body two lines down"
+              21
+              (unity-breakpoint-line 18 unity-lines))
+(check-equal! "a hook's body is found the same way" 7 (unity-breakpoint-line 5 unity-lines))
+(check-equal! "the runner's body is found the same way"
+              25
+              (unity-breakpoint-line 23 unity-lines))
+;; The two halves of detection meet here: a zero-based declaration line in,
+;; a one-based body line out.
+(check-equal! "the declaration a cursor resolves to feeds the breakpoint line"
+              16
+              (unity-breakpoint-line (list-ref (unity-function-at-line unity-lines 15) 1)
+                                     unity-lines))
+
+;; Chosen reading: the spec calls this the same rule the GoogleTest path
+;; uses, which skips everything between the brace and the first statement.
+(define unity-preamble-lines
+  (list "void test_preamble(void)"         ; 0
+        "{"                                ; 1
+        ""                                 ; 2
+        "  /* a block comment */"          ; 3
+        "  // a line comment"              ; 4
+        "  TEST_ASSERT_EQUAL_INT(1, 1);"   ; 5
+        "}"))                              ; 6
+
+(check-equal! "blank lines and both comment styles are skipped"
+              6
+              (unity-breakpoint-line 0 unity-preamble-lines))
+
+;; A body that never opens still has to name a line inside the buffer,
+;; because the adapter cannot stop past the end of the file.
+(check-equal! "a declaration with no body yields the line after it"
+              2
+              (unity-breakpoint-line 0 (list "void test_declared(void);"
+                                             "int value = 0;"
+                                             "int other = 1;")))
+(check-equal! "the line after the declaration, not the end of the file"
+              2
+              (unity-breakpoint-line 0 (list "void test_declared(void);" "int value = 0;")))
+(check-equal! "a declaration on the last line clamps to itself"
+              1
+              (unity-breakpoint-line 0 (list "void test_declared(void);")))
+
 (finish!)

@@ -43,15 +43,28 @@
                   ctest-test-directory
                   matching-tests
                   build-directory
-                  project-root))
+                  project-root
+                  run-test-names
+                  unity-breakpoint-line
+                  unity-function-at-line
+                  unity-test-registered?
+                  pio-build-arguments
+                  pio-debug-build
+                  pio-environment
+                  pio-outcome
+                  pio-program-path
+                  pio-root
+                  pio-run-arguments
+                  pio-test-folder))
 
-(provide test-debug
-         test-run
-         test-again
+(provide debug-here
+         dbgh
+         run-here
+         debug-again
          test-pick
-         test-doctor
-         test-debug-failure
-         test-cancel
+         debug-doctor
+         debug-failure
+         debug-cancel
          debug-breakpoint
          debug-breakpoints
          debug-breakpoints-clear
@@ -177,7 +190,7 @@
 ;; Resolve the cursor in a C or C++ buffer. The candidate from the cursor is
 ;; matched against what ctest registered, so a parameterized test resolves
 ;; to its generated siblings rather than failing.
-(define (cpp-request path lines line)
+(define (ctest-request path lines line)
   (let* ([test (cpp-test-at-line lines line (test-macros))]
          [root (project-root path path-exists?)]
          [build (if root (build-directory root path-exists?) #f)])
@@ -205,6 +218,61 @@
                     'executable (ctest-test-executable match)
                     'arguments (ctest-test-arguments match)
                     'directory (ctest-test-directory match)))]))])))
+
+;; Every registration in a test folder, not just in the file at the cursor:
+;; the runner's main is conventionally beside the tests rather than in them.
+(define (folder-registrations directory)
+  (let loop ([entries (safe-read-dir directory)] [found '()])
+    (if (empty? entries)
+        found
+        (let ([text (if (is-dir? (car entries)) #f (file-contents (car entries)))])
+          (loop (cdr entries)
+                (if (string? text)
+                    (append found (run-test-names (source-lines text)))
+                    found))))))
+
+;; Resolve the cursor in a PlatformIO project. Unity has no test attribute,
+;; so the cursor names a candidate and a RUN_TEST call in the folder is what
+;; makes it a test. There is no filter to pass: the program runs every test
+;; in its folder, and the breakpoint is what isolates this one.
+(define (unity-request path lines line root)
+  (let* ([function (unity-function-at-line lines line)]
+         [relative-path (path-within root path)]
+         [folder (pio-test-folder relative-path)]
+         [environment (pio-environment (or (file-contents (join-path root "platformio.ini")) ""))])
+    (cond
+      [(not function) "no function at or above the cursor"]
+      [(not folder)
+       (string-append (base-name path) " is not inside a test/<folder>/ of " root)]
+      [(not environment) (string-append "platformio.ini in " root " declares no environment")]
+      [(not (unity-test-registered? (car function)
+                                    (folder-registrations
+                                     (join-path (join-path root "test") folder))))
+       (string-append (car function)
+                      " is not a test; nothing in "
+                      folder
+                      " calls RUN_TEST("
+                      (car function)
+                      ")")]
+      [else
+       (hash 'language 'cpp
+             'kind 'unity
+             'root root
+             'file (base-name path)
+             'filter (car function)
+             'line (unity-breakpoint-line (car (cdr function)) lines)
+             'environment environment
+             'folder folder
+             'executable (join-path root (pio-program-path environment)))])))
+
+;; A project may carry both manifests. PlatformIO wins when the file is
+;; inside its test tree, because that is the only thing that could have
+;; built it.
+(define (cpp-request path lines line)
+  (let ([pio (pio-root path path-exists?)])
+    (if (and pio (pio-test-folder (path-within pio path)))
+        (unity-request path lines line pio)
+        (ctest-request path lines line))))
 
 ;; Resolve the cursor into a request, or a string saying why not. The
 ;; message names what was found, because "no test here" leaves you guessing
@@ -272,6 +340,11 @@
   ;; starts, so a remembered set has to be in place before this, not after.
   (restore-breakpoints! (request-root request))
   (cond
+    ;; A Unity program runs every test in its folder and takes no filter,
+    ;; so the breakpoint is what isolates the one under the cursor. Same
+    ;; template as a rust binary, for the same reason.
+    [(equal? (request-get request 'kind) 'unity)
+     (helix.debug-start *program-template* binary file (number->string line))]
     [(equal? (request-get request 'language) 'cpp)
      (helix.debug-start *binary-template*
                         binary
@@ -350,11 +423,31 @@
                                   " arguments; the launch template takes exactly one"))]
            [else (at-binary! binary)]))))))
 
+;; Build one test folder's program without running it. PlatformIO leaves it
+;; at a fixed path per environment, so nothing has to be parsed out of the
+;; build either.
+(define (build-pio-then! request at-binary!)
+  (let ([arguments (pio-debug-build (request-get request 'environment)
+                                    (request-get request 'folder))])
+    (start-job!
+     (string-append "building " (request-get request 'folder))
+     "sh"
+     (request-root request)
+     arguments
+     (lambda (output)
+       (let ([binary (request-get request 'executable)])
+         (cond
+           [(not (string? output))
+            (report-build-failure! request (string-append "pio " (string-join (pio-build-arguments (request-get request 'environment) (request-get request 'folder)) " ")))]
+           [(not (path-exists? binary))
+            (report-build-failure! request (string-append "pio " (string-join (pio-build-arguments (request-get request 'environment) (request-get request 'folder)) " ")))]
+           [else (at-binary! binary)]))))))
+
 (define (build-then! request at-binary!)
   (set! *last-request* request)
-  (if (equal? (request-get request 'language) 'cpp)
-      (build-cpp-then! request at-binary!)
-      (build-rust-then! request at-binary!)))
+  (cond [(equal? (request-get request 'kind) 'unity) (build-pio-then! request at-binary!)]
+        [(equal? (request-get request 'language) 'cpp) (build-cpp-then! request at-binary!)]
+        [else (build-rust-then! request at-binary!)]))
 
 (define (debug-request! request)
   (build-then! request
@@ -367,8 +460,11 @@
 (define (run-request! request)
   (set! *last-request* request)
   (cond
+    ;; A Unity run is per folder rather than per test, so the summary
+    ;; covers the folder and the status line says so.
+    [(equal? (request-get request 'kind) 'unity) (run-pio! request)]
     [(equal? (request-get request 'language) 'cpp)
-     (fail! "running without a debugger is rust only so far; use test-debug")]
+     (fail! "running a ctest without a debugger is not supported yet; use debug-here")]
     [(equal? (request-get request 'kind) 'binary) (run-binary! request)]
     [else
      (start-job!
@@ -382,6 +478,21 @@
               (status! (string-append (request-filter request) ": " outcome))
               (fail! (string-append (request-filter request)
                                     " printed no result; the build probably failed"))))))]))
+
+;; Run a test folder and report PlatformIO's summary. The folder is named
+;; in the status because the run is not confined to the test at the cursor.
+(define (run-pio! request)
+  (start-job!
+   (string-append "running " (request-get request 'folder))
+   "pio"
+   (request-root request)
+   (pio-run-arguments (request-get request 'environment) (request-get request 'folder))
+   (lambda (output)
+     (let ([outcome (if (string? output) (pio-outcome output) #f)])
+       (if outcome
+           (status! (string-append (request-get request 'folder) ": " outcome))
+           (fail! (string-append (request-get request 'folder)
+                                 " printed no summary; the build probably failed")))))))
 
 ;; Last non-blank line of some output, or #f.
 (define (last-line text)
@@ -430,20 +541,26 @@
             (begin (save-if-dirty!) (act! request))))))
 
 ;;@doc
-;; Debug the test under the cursor. Builds its cargo test target, then
-;; starts a debug session stopped on the test's first line.
-(define (test-debug)
+;; Debug the line under the cursor. In a test, builds its cargo test target
+;; and stops on the test's first line; anywhere else, builds the crate's
+;; binary and stops on the cursor itself.
+(define (debug-here)
   (with-request! debug-request!))
 
 ;;@doc
-;; Run the test under the cursor without a debugger and report its result.
-(define (test-run)
+;; Alias for debug-here.
+(define (dbgh)
+  (debug-here))
+
+;;@doc
+;; Run the line under the cursor without a debugger: a test and its result,
+;; or the crate's binary and its last line of output.
+(define (run-here)
   (with-request! run-request!))
 
 ;;@doc
-;; Debug the test from the last test-debug or test-run again, from any
-;; buffer.
-(define (test-again)
+;; Debug whatever debug-here or run-here last resolved, from any buffer.
+(define (debug-again)
   (cond [(job-running?) (fail! (string-append "already " *job-label*))]
         [*last-request* (debug-request! *last-request*)]
         [else (fail! "nothing debugged yet")]))
@@ -588,13 +705,13 @@
 ;;@doc
 ;; Run the test under the cursor and, if it fails, debug it stopped at the
 ;; line that panicked.
-(define (test-debug-failure)
+(define (debug-failure)
   (with-request! debug-failure!))
 
 ;;@doc
 ;; Stop waiting on the build in flight. Cargo keeps running; only the wait
 ;; is abandoned.
-(define (test-cancel)
+(define (debug-cancel)
   (if (job-running?)
       (begin
         (set! *job-label* #f)
@@ -667,17 +784,28 @@
   (let ([text (file-contents (breakpoint-store root))])
     (if (string? text) (text->breakpoints text) '())))
 
+;; The budget a workspace declares, or #f. It is a property of the target
+;; rather than of the cog: an RP2040 has four breakpoint comparators per
+;; core and probe-rs programs them directly, so the fifth breakpoint fails
+;; the session instead of degrading.
+(define (stored-budget root)
+  (let ([text (file-contents (breakpoint-store root))])
+    (if (string? text) (breakpoint-budget text) #f)))
+
 ;; Write the list back, creating .helix/ when it is the first breakpoint in
-;; a workspace. Returns whether it was written.
+;; a workspace, and preserving the budget the file declares. Returns
+;; whether it was written.
 (define (store-breakpoints! root breakpoints)
   (call-with-exception-handler
    (lambda (failure) #f)
    (lambda ()
-     (let ([directory (join-path root *breakpoint-directory*)])
+     (let ([directory (join-path root *breakpoint-directory*)]
+           [budget (stored-budget root)])
        (when (not (path-exists? directory))
          (create-directory! directory))
        (call-with-output-file (breakpoint-store root)
-                              (lambda (port) (display (breakpoints->text breakpoints) port)))
+                              (lambda (port)
+                                (display (breakpoints->text breakpoints budget) port)))
        #t))))
 
 (define (breakpoint-count-message count)
@@ -720,17 +848,30 @@
       (helix.goto-line (car (cdr breakpoint)))
       (dap_toggle_breakpoint))))
 
-;; Replay every stored breakpoint, then return to where the cursor was.
-;; Returns how many were placed.
+;; Replay the stored breakpoints the budget allows, then return to where
+;; the cursor was. Returns how many were placed, and how many were stored,
+;; so the caller can say what it dropped.
 (define (replay-breakpoints! root)
-  (let ([breakpoints (stored-breakpoints root)]
-        [was (focused-path)]
-        [line (+ (get-current-line-number) 1)])
-    (for-each (lambda (breakpoint) (replay-breakpoint! root breakpoint)) breakpoints)
+  (let* ([stored (stored-breakpoints root)]
+         [placing (within-budget stored (stored-budget root))]
+         [was (focused-path)]
+         [line (+ (get-current-line-number) 1)])
+    (for-each (lambda (breakpoint) (replay-breakpoint! root breakpoint)) placing)
     (when (string? was)
       (helix.open was)
       (helix.goto-line line))
-    (length breakpoints)))
+    (list (length placing) (length stored))))
+
+;; What to say after placing: the count, plus what the budget dropped. A
+;; report that always fires would be noise, so the pure half returns #f
+;; when there is nothing to add.
+(define (placement-message root placement)
+  (let* ([placed (car placement)]
+         [total (car (cdr placement))]
+         [dropped (budget-report placed total (stored-budget root))])
+    (if dropped
+        dropped
+        (string-append "restored " (breakpoint-count-message placed)))))
 
 ;; Place a workspace's breakpoints once per session, before the first
 ;; launch. Helix sends the breakpoints it holds when a session starts, so
@@ -738,9 +879,9 @@
 (define (restore-breakpoints! root)
   (when (and root (not (member? root *restored*)))
     (set! *restored* (cons root *restored*))
-    (let ([placed (replay-breakpoints! root)])
-      (when (> placed 0)
-        (status! (string-append "restored " (breakpoint-count-message placed)))))))
+    (let ([placement (replay-breakpoints! root)])
+      (when (> (car (cdr placement)) 0)
+        (status! (placement-message root placement))))))
 
 ;;@doc
 ;; Place this workspace's remembered breakpoints in the editor, opening
@@ -758,11 +899,8 @@
              (set! *restored* (cons root *restored*))
              ;; The status comes after the replay: opening each file paints
              ;; over whatever was on the line before.
-             (let ([placed (replay-breakpoints! root)])
-               (status! (string-append "restored "
-                                       (breakpoint-count-message placed)
-                                       " in "
-                                       root)))])))))
+             (let ([placement (replay-breakpoints! root)])
+               (status! (string-append (placement-message root placement) " in " root)))])))))
 
 ;;@doc
 ;; Forget this workspace's remembered breakpoints. Breakpoints already in
@@ -816,7 +954,7 @@
 
 ;;@doc
 ;; Report whether everything test-debug needs is in place, and what to fix.
-(define (test-doctor)
+(define (debug-doctor)
   (let ([checks (append (list (check "cargo" (if (which "cargo") #t #f) "cargo is not on PATH"))
                         (configuration-checks (languages-toml))
                         (cursor-checks))])

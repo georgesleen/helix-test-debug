@@ -112,6 +112,13 @@
               # this code has: there is no Scheme formatter here on purpose,
               # see README.md.
               steel
+              # Drives tests/pio-fixture, which the integration check uses
+              # for the Unity path. Its core directory needs the network
+              # once, to install the native platform.
+              platformio
+              # The DAP adapter for an embedded target. See docs/embedded.md;
+              # nothing here drives it yet.
+              probe-rs-tools
             ];
           };
         }

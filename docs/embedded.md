@@ -92,7 +92,7 @@ the unanswered `GetCommandLine`, which reads as a hang.
 Two ways out, both real work outside this repo:
 
 1. Add an `evaluate` command to the Steel API in the fork already being run,
-   then `:test-debug` on embedded is a launch followed by one `evaluate`.
+   then `:debug-here` on embedded is a launch followed by one `evaluate`.
    This is the honest fix and is upstreamable.
 2. Have the cog own the semihosting handshake, which means not using
    probe-rs's DAP server. Much larger, and duplicates probe-rs.
@@ -134,7 +134,7 @@ without it every launch leaks a `probe-rs` process holding the probe.
 `connectUnderReset` must stay false. The retail Debug Probe has no reset
 pin; the firmware's reset routine is a no-op.
 
-**Run one embedded test.** `:test-run` needs no debugger and no new
+**Run one embedded test.** `:run-here` needs no debugger and no new
 mechanism: `probe-rs run --chip RP2040 <elf> --exact tests::name` flashes,
 runs exactly that test, and prints a genuine libtest summary, because
 probe-rs feeds `libtest_mimic::run`. `test-outcome` parses that output
@@ -176,7 +176,7 @@ transfer — the same wall as probe-rs, for the same reason.
 
 1. Firmware at the cursor, through probe-rs, breakpoint via Helix. Needs no
    upstream change. Needs hardware to verify.
-2. `:test-run` for embedded tests, dropping `--test-threads`.
+2. `:run-here` for embedded tests, dropping `--test-threads`.
 3. An `evaluate` command in the Steel API, then single-test debugging.
 4. PlatformIO, which needs its own detection rule before any of its launch
    story matters.

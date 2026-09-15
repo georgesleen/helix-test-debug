@@ -5,9 +5,20 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 
 ## Unreleased
 
-- A line that is not in a test is debuggable: `:test-debug` builds the
-  crate's binary and stops at the cursor. `:test-run` runs it and reports
-  its last line, `:test-debug-failure` stops where it panicked. Needs the
+- PlatformIO and Unity: `:debug-here` builds a test folder's program and
+  stops in the test under the cursor. A `RUN_TEST` call in the folder is
+  what makes a function a test, since Unity marks nothing. `:run-here` runs
+  the folder and reports PlatformIO's summary.
+- A workspace can declare a breakpoint budget, for targets with a fixed
+  number of hardware breakpoints.
+- The commands are renamed: `:test-debug` is `:debug-here` (alias `:dbgh`),
+  `:test-run` is `:run-here`, and the other `test-` commands that are no
+  longer test-specific take the `debug-` prefix. `:test-pick` keeps its
+  name, being the one command that is only about tests.
+
+- A line that is not in a test is debuggable: `:debug-here` builds the
+  crate's binary and stops at the cursor. `:run-here` runs it and reports
+  its last line, `:debug-failure` stops where it panicked. Needs the
   new `program at line` template.
 
 - `:debug-breakpoint` remembers a breakpoint in
@@ -20,7 +31,7 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 - Removed the libtest `--list` parser. Discovery reads the sources instead,
   which needs no build and yields the line to stop on.
 
-- C and C++ support for `:test-debug`, through CMake and ctest. Detection is
+- C and C++ support for `:debug-here`, through CMake and ctest. Detection is
   a macro table covering GoogleTest, Catch2, doctest and Boost; ctest is the
   authority on which tests exist and how they are run.
 - The pure half is split into one module per spec under `test-debug/`, with
@@ -29,9 +40,9 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 - Commands renamed for discoverability: `test-debug`, `test-run`,
   `test-again`, `test-doctor` act on the test under the cursor; `debug-*`
   act on a running session.
-- `:test-debug-failure` runs the test and, when it fails, starts a session
+- `:debug-failure` runs the test and, when it fails, starts a session
   stopped at the line that panicked.
-- `:test-cancel` abandons the wait on a build in flight.
+- `:debug-cancel` abandons the wait on a build in flight.
 - A dirty buffer is written before building.
 - `docs/specs/` holds one behavioural spec per concern. The tests for this
   round were written from those specs by an author who could not see the

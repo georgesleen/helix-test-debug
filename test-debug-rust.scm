@@ -15,7 +15,10 @@
 (require "test-debug/rust/binary.scm")
 
 (provide base-name
+         breakpoint-budget
          breakpoints->text
+         budget-report
+         within-budget
          check
          clamp-line
          crate-root
