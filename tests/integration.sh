@@ -115,6 +115,7 @@ engine_error() {
 
 mkdir -p "$config/helix/cogs"
 cp "$cog_dir/test-debug.scm" "$cog_dir/test-debug-rust.scm" "$config/helix/cogs/"
+cp -r "$cog_dir/test-debug" "$config/helix/cogs/"
 cat >"$config/helix/helix.scm" <<'EOF'
 (require "cogs/test-debug.scm")
 (provide test-debug

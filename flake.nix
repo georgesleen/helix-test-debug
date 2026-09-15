@@ -48,6 +48,11 @@
           config = lib.mkIf config.programs.helix.testDebug.enable {
             xdg.configFile."helix/cogs/test-debug.scm".source = "${self}/test-debug.scm";
             xdg.configFile."helix/cogs/test-debug-rust.scm".source = "${self}/test-debug-rust.scm";
+            # The modules those two require, resolved relative to themselves.
+            xdg.configFile."helix/cogs/test-debug" = {
+              source = "${self}/test-debug";
+              recursive = true;
+            };
           };
         };
 

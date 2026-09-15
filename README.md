@@ -42,14 +42,16 @@ and a DAP adapter for Rust (`lldb-dap`).
 
 ## Install
 
-Copy both files into your Helix configuration directory:
+Copy the cog into your Helix configuration directory:
 
 ```
 cp test-debug.scm test-debug-rust.scm ~/.config/helix/cogs/
+cp -r test-debug ~/.config/helix/cogs/
 ```
 
-`test-debug.scm` requires `test-debug-rust.scm` from the same directory, so
-they must stay together.
+`test-debug.scm` is the editor half, `test-debug-rust.scm` gathers the rust
+half, and `test-debug/` holds one module per concern. The requires between
+them are relative, so the three have to land together.
 
 Then pull the commands into global scope from `~/.config/helix/helix.scm`,
 which is what makes them dispatchable:
@@ -163,11 +165,28 @@ necessarily the `rustc` first on your `PATH`.
 
 ## Structure
 
-`test-debug-rust.scm` holds every decision: which test the cursor is in, which
-cargo target to build, where the breakpoint goes, and which artifact in cargo's
-JSON output is the test binary. It is pure, filesystem access arrives as an
-injected predicate, and it runs under a bare `steel` interpreter, which is where
-its tests run.
+Every decision lives in `test-debug/`, one module per spec in `docs/specs/`,
+all of it pure: filesystem access arrives as an injected predicate, so the
+whole half runs under a bare `steel` interpreter, which is where its tests
+run. `test-debug-rust.scm` gathers those modules for the editor half and the
+tests.
+
+```
+test-debug/text.scm          strings and lines
+test-debug/paths.scm         path arithmetic, the crate root
+test-debug/breakpoints.scm   the breakpoint text format
+test-debug/diagnosis.scm     the setup check
+test-debug/messages.scm      what the editor reports
+test-debug/rust/cursor.scm   finding the test under the cursor
+test-debug/rust/names.scm    the path libtest matches
+test-debug/rust/cargo.scm    invoking cargo, reading its output
+```
+
+Dependencies run one way: `text` and `paths` depend on nothing, `cursor` on
+`text`, `names` on `cursor`, `cargo` on `names`. Only the three modules under
+`rust/` know anything about Rust, so a second language adds a sibling
+directory and one dispatch, rather than an archaeology pass over a flat
+file.
 
 `test-debug.scm` is the editor half: it reads the cursor, runs cargo on a
 spawned thread so the build does not freeze the editor, and polls from the
