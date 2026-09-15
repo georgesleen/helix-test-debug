@@ -23,6 +23,7 @@ which it takes and which it returns.
 | [crate-discovery.md](crate-discovery.md) | finding every test in a crate |
 | [cargo-invocation.md](cargo-invocation.md) | which target to build, and how |
 | [cargo-output.md](cargo-output.md) | reading cargo's JSON and its summaries |
+| [binary-target.md](binary-target.md) | building and running the crate's binary |
 | [panic-location.md](panic-location.md) | where a failing test panicked |
 | [cpp-cursor-to-test.md](cpp-cursor-to-test.md) | finding the C or C++ test the cursor is in |
 | [ctest-discovery.md](ctest-discovery.md) | what ctest says a test is and how it runs |
