@@ -114,7 +114,8 @@ engine_error() {
 }
 
 mkdir -p "$config/helix/cogs"
-cp "$cog_dir/test-debug.scm" "$cog_dir/test-debug-rust.scm" "$config/helix/cogs/"
+cp "$cog_dir/test-debug.scm" "$cog_dir/test-debug-rust.scm" \
+   "$cog_dir/test-debug-cpp.scm" "$config/helix/cogs/"
 cp -r "$cog_dir/test-debug" "$config/helix/cogs/"
 cat >"$config/helix/helix.scm" <<'EOF'
 (require "cogs/test-debug.scm")
@@ -176,10 +177,13 @@ cat >"$workdir/session.sh" <<'EOF'
 set -u
 echo $$ >"$SESSION_PID_FILE"
 {
-  sleep 2
+  # Helix needs longer than its first paint before it reads reliably: a
+  # keystroke sent too early is swallowed, which showed up as the cursor
+  # still being on line 1 when the command ran.
+  sleep 4
   for key in "$@"; do
     printf '%s\r' "$key"
-    sleep 1
+    sleep 2
   done
   sleep "$LINGER"
   printf ':q!\r'

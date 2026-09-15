@@ -36,16 +36,19 @@ place, so the stepping commands here rebuild it after the adapter reports
 the new stop location. Bind them over `<space>G n i o c` to get a variables
 view that follows the program.
 
+Rust is complete. C and C++ debug the test under the cursor through CMake and
+ctest: see [C and C++](#c-and-c) below for what works and what does not yet.
+
 Requires [Helix with the Steel plugin
-system](https://github.com/mattwparas/helix/tree/steel-event-system), `cargo`,
-and a DAP adapter for Rust (`lldb-dap`).
+system](https://github.com/mattwparas/helix/tree/steel-event-system), a DAP
+adapter (`lldb-dap`), and `cargo` or `cmake` and `ctest`.
 
 ## Install
 
 Copy the cog into your Helix configuration directory:
 
 ```
-cp test-debug.scm test-debug-rust.scm ~/.config/helix/cogs/
+cp test-debug.scm test-debug-rust.scm test-debug-cpp.scm ~/.config/helix/cogs/
 cp -r test-debug ~/.config/helix/cogs/
 ```
 
@@ -162,6 +165,40 @@ exec lldb-dap \
 Point `command` at that wrapper. The sysroot is resolved when the debugger
 starts because it has to match the toolchain that built the binary, which is not
 necessarily the `rustc` first on your `PATH`.
+
+## C and C++
+
+`:test-debug` works in a `.c`, `.cc`, `.cpp`, `.cxx` or header buffer whose
+project is CMake based, with a configured build directory (`build`,
+`cmake-build-debug` or `cmake-build-release`).
+
+C and C++ have no universal test attribute, so detection is table driven:
+`TEST`, `TEST_F`, `TEST_P`, `TYPED_TEST`, `TYPED_TEST_P`,
+`BOOST_AUTO_TEST_CASE`, `BOOST_FIXTURE_TEST_CASE`, `TEST_CASE` and `SCENARIO`.
+A codebase wrapping one of those in its own macro adds a pair to
+`test-macros` in `test-debug/cpp/cursor.scm`.
+
+The cursor only has to produce a **candidate**. The authority on what tests
+exist is `ctest --show-only=json-v1`, which once the target is built reports
+each test's name, executable and exact arguments:
+
+```json
+{ "name": "MathTest.Doubles",
+  "command": ["/w/build/suite", "--gtest_filter=MathTest.Doubles"] }
+```
+
+Two consequences. The cog never needs to know GoogleTest's filter flag
+versus Catch2's or doctest's, because ctest already encodes it. And a
+candidate is *matched* rather than compared, so a parameterized test
+registered as `Suite.Name/0` still resolves.
+
+That needs the second template from `languages.toml`, `binary at line`; the
+flake exposes it as `lib.binaryDebuggerTemplate`.
+
+Not yet: `:test-run` and `:test-debug-failure` are Rust only, since they read
+libtest's summary and panic line. Both say so rather than misreporting. A
+ctest command with more than one argument is refused, because a static
+template cannot take a variable argument list.
 
 ## Structure
 

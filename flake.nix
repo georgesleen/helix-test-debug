@@ -9,9 +9,9 @@
       forAllSystems = nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed;
     in
     {
-      # The debugger template :debug-test drives. Splice it into the
-      # templates list of your own rust language entry; a second [[language]]
-      # entry for the same name would not merge.
+      # The debugger templates the cog drives. Splice them into the templates
+      # list of your own language entry; a second [[language]] entry for the
+      # same name would not merge.
       lib.rustDebuggerTemplate = {
         name = "cargo test at line";
         request = "launch";
@@ -37,6 +37,27 @@
         };
       };
 
+      # For a binary ctest already named, which needs no filter flag because
+      # ctest reported the argument that selects the test.
+      lib.binaryDebuggerTemplate = {
+        name = "binary at line";
+        request = "launch";
+        completion = [
+          {
+            name = "binary";
+            completion = "filename";
+          }
+          { name = "test argument"; }
+          { name = "source file"; }
+          { name = "line"; }
+        ];
+        args = {
+          program = "{0}";
+          args = [ "{1}" ];
+          preRunCommands = [ "breakpoint set --file {2} --line {3}" ];
+        };
+      };
+
       # Installs both halves of the cog. The require line stays yours,
       # because helix.scm is where your own commands live and a module
       # cannot own that file without clobbering them.
@@ -48,6 +69,7 @@
           config = lib.mkIf config.programs.helix.testDebug.enable {
             xdg.configFile."helix/cogs/test-debug.scm".source = "${self}/test-debug.scm";
             xdg.configFile."helix/cogs/test-debug-rust.scm".source = "${self}/test-debug-rust.scm";
+            xdg.configFile."helix/cogs/test-debug-cpp.scm".source = "${self}/test-debug-cpp.scm";
             # The modules those two require, resolved relative to themselves.
             xdg.configFile."helix/cogs/test-debug" = {
               source = "${self}/test-debug";

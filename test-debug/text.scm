@@ -4,7 +4,8 @@
 
 (require-builtin steel/strings)
 
-(provide drop-trailing-colon
+(provide clamp-line
+         drop-trailing-colon
          identifier-prefix
          identifier-prefix-until
          indentation
@@ -55,3 +56,10 @@
   (if (ends-with? text ":")
       (substring text 0 (- (string-length text) 1))
       text))
+
+;; A line index brought inside the buffer.
+(define (clamp-line lines line)
+  (let ([last-index (- (length lines) 1)])
+    (cond [(> line last-index) last-index]
+          [(< line 0) 0]
+          [else line])))

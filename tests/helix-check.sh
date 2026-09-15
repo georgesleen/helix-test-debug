@@ -32,7 +32,7 @@ workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
 mkdir -p "$workdir/config/helix/cogs"
-cp test-debug.scm test-debug-rust.scm "$workdir/config/helix/cogs/"
+cp test-debug.scm test-debug-rust.scm test-debug-cpp.scm "$workdir/config/helix/cogs/"
 cp -r test-debug "$workdir/config/helix/cogs/"
 cat >"$workdir/config/helix/helix.scm" <<'EOF'
 (require "cogs/test-debug.scm")

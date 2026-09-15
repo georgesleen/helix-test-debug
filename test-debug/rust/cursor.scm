@@ -44,12 +44,6 @@
   (let ([text (trim line)])
     (or (equal? text "") (starts-with? text "//") (starts-with? text "#["))))
 
-(define (clamp-line lines line)
-  (let ([last-index (- (length lines) 1)])
-    (cond [(> line last-index) last-index]
-          [(< line 0) 0]
-          [else line])))
-
 ;; Nearest declaration below a line, so long as only attributes, comments
 ;; and blanks intervene. Covers a cursor parked on the #[test] line.
 (define (declaration-line-below lines line)

@@ -5,6 +5,12 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 
 ## Unreleased
 
+- C and C++ support for `:test-debug`, through CMake and ctest. Detection is
+  a macro table covering GoogleTest, Catch2, doctest and Boost; ctest is the
+  authority on which tests exist and how they are run.
+- The pure half is split into one module per spec under `test-debug/`, with
+  only `test-debug/rust/` and `test-debug/cpp/` knowing a language.
+
 - Commands renamed for discoverability: `test-debug`, `test-run`,
   `test-again`, `test-doctor` act on the test under the cursor; `debug-*`
   act on a running session.

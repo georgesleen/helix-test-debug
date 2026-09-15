@@ -1,5 +1,5 @@
-;; helix-test-debug: the rust half, gathered for the editor half and the
-;; tests. Each module carries its own spec reference; see docs/specs/.
+;; helix-test-debug: the rust half plus the shared modules, gathered for the editor
+;; half and the tests. Each module names its own spec; see docs/specs/.
 ;;
 ;; SPDX-License-Identifier: LGPL-3.0-or-later
 
@@ -13,34 +13,42 @@
 (require "test-debug/rust/cargo.scm")
 
 (provide base-name
-         breakpoint-line
          breakpoints->text
-         build-arguments
          check
+         clamp-line
          crate-root
          debugger-command
-         declaration-name-at
          diagnosis
          diagnosis-ok?
          dirty-buffer-warning
+         drop-trailing-colon
+         identifier-prefix
+         identifier-prefix-until
+         indentation
+         join-path
+         member?
+         parent-directory
+         path-within
+         source-lines
+         template-present?
+         text->breakpoints
+         text-after
+         breakpoint-line
+         build-arguments
+         declaration-name-at
          enclosing-modules
          executable-from-cargo-output
          function-name
-         indentation
-         join-path
          module-prefix
          outcome-failed?
          panic-location
-         parent-directory
-         path-within
          qualified-test-name
          run-arguments
-         source-lines
+         strip-rust-extension
          target-arguments
-         template-present?
          test-at-line
          test-attribute?
          test-declaration-line
+         test-name
          test-names-from-list
-         test-outcome
-         text->breakpoints)
+         test-outcome)
