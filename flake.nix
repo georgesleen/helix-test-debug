@@ -37,6 +37,26 @@
         };
       };
 
+      # For the crate's own binary, stopped at the cursor: a line that is not
+      # in a test. A template's arguments are positional, so one with no
+      # filter has to be its own template.
+      lib.programDebuggerTemplate = {
+        name = "program at line";
+        request = "launch";
+        completion = [
+          {
+            name = "binary";
+            completion = "filename";
+          }
+          { name = "source file"; }
+          { name = "line"; }
+        ];
+        args = {
+          program = "{0}";
+          preRunCommands = [ "breakpoint set --file {1} --line {2}" ];
+        };
+      };
+
       # For a binary ctest already named, which needs no filter flag because
       # ctest reported the argument that selects the test.
       lib.binaryDebuggerTemplate = {
@@ -88,6 +108,9 @@
             packages = with pkgs; [
               gnumake
               nixfmt
+              # Also provides steel-language-server, which is the tooling
+              # this code has: there is no Scheme formatter here on purpose,
+              # see README.md.
               steel
             ];
           };
@@ -103,6 +126,7 @@
           tests = pkgs.runCommand "helix-test-debug-tests" { nativeBuildInputs = [ pkgs.steel ]; } ''
             cd ${self}
             steel tests/rust-test.scm | tee $out
+            steel tests/cpp-test.scm | tee -a $out
           '';
 
           compile-check =

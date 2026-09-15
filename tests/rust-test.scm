@@ -616,4 +616,174 @@
               "nothing matches zzz"
               (discovery-summary "zzz" '() 12))
 
+;; binary-target-arguments: which binary target holds the file, for a
+;; cursor that is not in a test
+(check-equal! "a file under src/bin names its binary"
+              '("--bin" "tool")
+              (binary-target-arguments "src/bin/tool.rs"))
+(check-equal! "the directory form of the same target"
+              '("--bin" "tool")
+              (binary-target-arguments "src/bin/tool/main.rs"))
+(check-equal! "a module beside that main belongs to the same binary"
+              '("--bin" "tool")
+              (binary-target-arguments "src/bin/tool/helper.rs"))
+;; The package's own binary is named in Cargo.toml, not by its path.
+(check-equal! "the crate's own binary root selects nothing"
+              '()
+              (binary-target-arguments "src/main.rs"))
+(check-equal! "the library root selects nothing"
+              '()
+              (binary-target-arguments "src/lib.rs"))
+(check-equal! "library code selects nothing, cargo picks"
+              '()
+              (binary-target-arguments "src/analysis/signal.rs"))
+(check-equal! "an integration test file has no binary"
+              '()
+              (binary-target-arguments "tests/skeleton.rs"))
+(check-equal! "an integration test directory has no binary"
+              '()
+              (binary-target-arguments "tests/skeleton/main.rs"))
+(check-equal! "a benchmark has no binary"
+              '()
+              (binary-target-arguments "benches/throughput.rs"))
+(check-equal! "a path with no directory segment selects nothing"
+              '()
+              (binary-target-arguments "build.rs"))
+
+;; binary-build-arguments: the fixed prefix builds without running, and
+;; json is what names the executable
+(check-equal! "build one binary"
+              '("build" "--message-format=json" "--bin" "tool")
+              (binary-build-arguments "src/bin/tool.rs"))
+(check-equal! "build the directory form of the same target"
+              '("build" "--message-format=json" "--bin" "tool")
+              (binary-build-arguments "src/bin/tool/main.rs"))
+(check-equal! "an unselective location builds every binary"
+              '("build" "--message-format=json")
+              (binary-build-arguments "src/main.rs"))
+(check-equal! "library code builds every binary"
+              '("build" "--message-format=json")
+              (binary-build-arguments "src/analysis/signal.rs"))
+;; `--no-run` has no meaning for `cargo build`, so it must not be carried
+;; over from the test invocation.
+(check-true! "no --no-run in a build invocation"
+             (empty? (filter (lambda (argument) (equal? argument "--no-run"))
+                             (binary-build-arguments "src/bin/tool.rs"))))
+
+;; binary-run-arguments: the program is run for its own output, so there
+;; is nothing to filter and nothing to parse
+(check-equal! "run one binary"
+              '("run" "--bin" "tool")
+              (binary-run-arguments "src/bin/tool.rs"))
+(check-equal! "run the directory form of the same target"
+              '("run" "--bin" "tool")
+              (binary-run-arguments "src/bin/tool/main.rs"))
+(check-equal! "an unselective location runs the package's binary"
+              '("run")
+              (binary-run-arguments "src/main.rs"))
+(check-equal! "library code runs the package's binary"
+              '("run")
+              (binary-run-arguments "src/lib.rs"))
+(check-true! "no -- because there is no filter to pass"
+             (empty? (filter (lambda (argument) (equal? argument "--"))
+                             (binary-run-arguments "src/bin/tool.rs"))))
+(check-true! "no message format, so the program's own output shows"
+             (empty? (filter (lambda (argument) (equal? argument "--message-format=json"))
+                             (binary-run-arguments "src/bin/tool.rs"))))
+
+;; bin-executable-from-cargo-output: shaped like real `cargo build
+;; --message-format=json` output, where the build script and the test
+;; build of the same crate also carry executables and must not be picked
+(define binary-cargo-output
+  (string-append
+   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"custom-build\"],\"name\":\"build-script-build\"},"
+   "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/build/kitest-1a2b3c/build-script-build\"}\n"
+   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"lib\"],\"name\":\"kitest\"},"
+   "\"profile\":{\"test\":false},\"executable\":null}\n"
+   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"lib\"],\"name\":\"kitest\"},"
+   "\"profile\":{\"test\":true},\"executable\":\"/w/target/debug/deps/kitest-54a5895930f6071f\"}\n"
+   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"kitest-cli\"},"
+   "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/kitest-cli\"}\n"
+   "{\"reason\":\"build-finished\",\"success\":true}\n"))
+
+;; Two binaries in one package, which is what a cursor in shared library
+;; code produces. The documented cost is that the first one reported wins,
+;; the opposite of the test-target function's rule.
+(define two-binary-cargo-output
+  (string-append
+   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"tool\"},"
+   "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/tool\"}\n"
+   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"helper\"},"
+   "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/helper\"}\n"
+   "{\"reason\":\"build-finished\",\"success\":true}\n"))
+
+(check-equal! "the binary artifact is selected"
+              "/w/target/debug/kitest-cli"
+              (bin-executable-from-cargo-output binary-cargo-output))
+(check-equal! "the first binary wins, not the last"
+              "/w/target/debug/tool"
+              (bin-executable-from-cargo-output two-binary-cargo-output))
+(check-false! "a build script is not a binary, executable and all"
+              (bin-executable-from-cargo-output
+               (string-append
+                "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"custom-build\"],\"name\":\"build-script-build\"},"
+                "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/build/kitest-1a2b3c/build-script-build\"}\n"
+                "{\"reason\":\"build-finished\",\"success\":true}\n")))
+(check-false! "a test artifact is not a binary"
+              (bin-executable-from-cargo-output
+               (string-append
+                "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"lib\"],\"name\":\"kitest\"},"
+                "\"profile\":{\"test\":true},\"executable\":\"/w/target/debug/deps/kitest-54a5895930f6071f\"}\n")))
+;; The test build of a bin target has kind `bin` too, so the profile is
+;; what keeps this and `executable-from-cargo-output` apart.
+(check-false! "the test build of a bin target is not a binary"
+              (bin-executable-from-cargo-output
+               (string-append
+                "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"tool\"},"
+                "\"profile\":{\"test\":true},\"executable\":\"/w/target/debug/deps/tool-9f1c2d3e4b5a6071\"}\n")))
+(check-false! "an artifact without an executable does not qualify"
+              (bin-executable-from-cargo-output
+               (string-append
+                "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"tool\"},"
+                "\"profile\":{\"test\":false},\"executable\":null}\n")))
+(check-false! "no artifact in the output"
+              (bin-executable-from-cargo-output "{\"reason\":\"build-finished\",\"success\":true}\n"))
+(check-false! "a build failure names no executable"
+              (bin-executable-from-cargo-output
+               (string-append
+                "{\"reason\":\"compiler-message\",\"message\":{\"level\":\"error\"}}\n"
+                "{\"reason\":\"build-finished\",\"success\":false}\n")))
+(check-false! "nothing was printed at all" (bin-executable-from-cargo-output ""))
+(check-false! "compiler warnings on stdout do not derail parsing"
+              (bin-executable-from-cargo-output "warning: unused variable\nnot json at all\n"))
+;; A json line that parses to something other than an object is skipped on
+;; the same principle as a line that does not parse at all.
+(check-equal! "non-json and non-object lines are skipped, the artifact is still found"
+              "/w/target/debug/tool"
+              (bin-executable-from-cargo-output
+               (string-append
+                "warning: unused variable `x`\n"
+                "[1, 2, 3]\n"
+                "42\n"
+                "\"a bare string\"\n"
+                "null\n"
+                "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"tool\"},"
+                "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/tool\"}\n")))
+;; The spec says the kind list contains `bin`, not that it is only `bin`.
+(check-equal! "a kind list containing bin among others qualifies"
+              "/w/target/debug/tool"
+              (bin-executable-from-cargo-output
+               (string-append
+                "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"cdylib\",\"bin\"],\"name\":\"tool\"},"
+                "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/tool\"}\n")))
+
+;; binary-label: what the status line calls the thing about to run
+(check-equal! "a file under src/bin names its binary" "bin tool" (binary-label "src/bin/tool.rs"))
+(check-equal! "the directory form is the same binary" "bin tool" (binary-label "src/bin/tool/main.rs"))
+(check-equal! "the crate's own binary is unnamed here" "the binary" (binary-label "src/main.rs"))
+(check-equal! "the library root is not a binary" "the binary" (binary-label "src/lib.rs"))
+(check-equal! "library code is not a binary" "the binary" (binary-label "src/analysis/signal.rs"))
+(check-equal! "an integration test selects no binary" "the binary" (binary-label "tests/skeleton.rs"))
+(check-equal! "a bare file selects no binary" "the binary" (binary-label "build.rs"))
+
 (finish!)

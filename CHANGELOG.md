@@ -5,6 +5,11 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 
 ## Unreleased
 
+- A line that is not in a test is debuggable: `:test-debug` builds the
+  crate's binary and stops at the cursor. `:test-run` runs it and reports
+  its last line, `:test-debug-failure` stops where it panicked. Needs the
+  new `program at line` template.
+
 - `:debug-breakpoint` remembers a breakpoint in
   `.helix/test-debug-breakpoints` under the workspace root, and it is placed
   again on the first launch after a restart. `:debug-breakpoints` and

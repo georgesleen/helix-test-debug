@@ -10,7 +10,7 @@ no test filter.
 
 | command | what it does |
 | --- | --- |
-| `:test-debug` | build and debug the test under the cursor |
+| `:test-debug` | build and debug the test under the cursor, or the binary when the line is not in a test |
 | `:test-run` | run it without a debugger and report the result |
 | `:test-debug-failure` | run it, and if it fails debug it stopped where it panicked |
 | `:test-pick` | pick a test from anywhere in the crate and debug it |
@@ -124,6 +124,16 @@ completion = [
   { name = "line" },
 ]
 args = { program = "{0}", args = [ "{1}", "--exact", "--include-ignored", "--test-threads=1", "--nocapture" ], preRunCommands = [ "breakpoint set --file {2} --line {3}" ] }
+
+[[language.debugger.templates]]
+name = "program at line"
+request = "launch"
+completion = [
+  { name = "binary", completion = "filename" },
+  { name = "source file" },
+  { name = "line" },
+]
+args = { program = "{0}", preRunCommands = [ "breakpoint set --file {1} --line {2}" ] }
 ```
 
 Four parts of that are load-bearing.
@@ -203,6 +213,22 @@ Not yet: `:test-run` and `:test-debug-failure` are Rust only, since they read
 libtest's summary and panic line. Both say so rather than misreporting. A
 ctest command with more than one argument is refused, because a static
 template cannot take a variable argument list.
+
+## Lines that are not tests
+
+A breakpoint does not care whether the line is in a test, so when the cursor
+is not in one `:test-debug` builds the crate's binary and stops at the
+cursor itself rather than at the first line of a body. Nothing has to be
+marked; every line of a crate with a binary is debuggable.
+
+`:test-run` runs that binary and reports the last line it printed, and
+`:test-debug-failure` runs it and, if it panics, stops where it panicked.
+The launch needs the `program at line` template, which takes no filter.
+
+`src/bin/tool.rs` resolves to `--bin tool`; a cursor in library code or in
+`src/main.rs` leaves the target to cargo, so a package with several binaries
+resolves to whichever cargo reports first. C and C++ have no fallback: ctest
+knows tests, not programs, and the command says so rather than guessing.
 
 ## Remembered breakpoints
 
@@ -294,6 +320,19 @@ lazily, so an error inside a command surfaces only when it runs. It drives
 screen said — the test the fixture recorded to a log, and a test binary
 stopped by a debugger in `/proc`. The picked test is deliberately not the
 one under the cursor, so the pick cannot be satisfied by the cursor path.
+
+## Tooling
+
+`nix develop` provides `steel`, which carries `steel-language-server`, and
+`nixfmt`. Point Helix's `scheme` language at `steel-language-server` and set
+`STEEL_LSP_HOME` somewhere writable: its default is `$STEEL_HOME/lsp`, which
+on Nix is a read-only store path, and the server panics creating it.
+
+There is deliberately no Scheme formatter. `schemat`, the only one packaged,
+reindents continuation arguments to a fixed two spaces, while this code
+aligns them under the first argument as Scheme and Racket conventionally do.
+Adopting it would reformat every file for no correctness gain, so `make fmt`
+covers `flake.nix` only and the Scheme is formatted by hand.
 
 ## Limitations
 

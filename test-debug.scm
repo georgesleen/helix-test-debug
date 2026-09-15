@@ -61,14 +61,19 @@
          debug-step-out
          debug-continue)
 
-;; Debugger template this cog drives, taking the binary, the test filter,
-;; the source file and the line to stop on. README.md carries the
+;; Debugger templates this cog drives. README.md carries the
 ;; languages.toml it expects.
+;;
+;; A test: the binary, the test filter, the source file and the line.
 (define *cargo-template* "cargo test at line")
 
-;; Template for a binary ctest already named, which needs no filter flag
-;; because ctest reported the argument that selects the test.
+;; A binary ctest already named, which needs no filter flag because ctest
+;; reported the argument that selects the test.
 (define *binary-template* "binary at line")
+
+;; The crate's own binary, stopped at the cursor. A template's arguments
+;; are positional, so one with no filter has to be its own template.
+(define *program-template* "program at line")
 
 ;; Cargo is polled from the editor thread this often, and abandoned after
 ;; this many polls.
@@ -141,23 +146,33 @@
 (define (request-filter request) (request-get request 'filter))
 (define (request-line request) (request-get request 'line))
 
-;; Resolve the cursor in a rust buffer, or a string saying why not.
+;; Resolve the cursor in a rust buffer, or a string saying why not. A line
+;; that is not in a test is not a failure: the breakpoint machinery does not
+;; care, so the crate's binary is built instead and stopped at the cursor
+;; itself rather than at the first line of a body.
 (define (rust-request path lines line)
   (let ([test (test-at-line lines line)]
-        [root (crate-root path path-exists?)]
-        [found (declaration-name-at lines line)])
+        [root (crate-root path path-exists?)])
     (cond
       [(not root) (string-append "no Cargo.toml above " (base-name path))]
       [test
        (let ([relative-path (path-within root path)])
          (hash 'language 'rust
+               'kind 'test
                'root root
                'relative-path relative-path
                'file (base-name path)
                'filter (qualified-test-name relative-path lines test)
                'line (breakpoint-line (test-declaration-line test))))]
-      [found (string-append found " is not a test; it has no #[test] attribute")]
-      [else "no function at or above the cursor"])))
+      [else
+       (let ([relative-path (path-within root path)])
+         (hash 'language 'rust
+               'kind 'binary
+               'root root
+               'relative-path relative-path
+               'file (base-name path)
+               'filter (binary-label relative-path)
+               'line (+ line 1)))])))
 
 ;; Resolve the cursor in a C or C++ buffer. The candidate from the cursor is
 ;; matched against what ctest registered, so a parameterized test resolves
@@ -256,17 +271,23 @@
   ;; Helix hands the adapter the breakpoints it holds when the session
   ;; starts, so a remembered set has to be in place before this, not after.
   (restore-breakpoints! (request-root request))
-  (if (equal? (request-get request 'language) 'cpp)
-      (helix.debug-start *binary-template*
-                         binary
-                         (car (request-get request 'arguments))
-                         file
-                         (number->string line))
-      (helix.debug-start *cargo-template*
-                         binary
-                         (request-filter request)
-                         file
-                         (number->string line)))
+  (cond
+    [(equal? (request-get request 'language) 'cpp)
+     (helix.debug-start *binary-template*
+                        binary
+                        (car (request-get request 'arguments))
+                        file
+                        (number->string line))]
+    ;; A binary takes no filter, so it needs a template of its own: a
+    ;; template's arguments are positional and cannot be left out.
+    [(equal? (request-get request 'kind) 'binary)
+     (helix.debug-start *program-template* binary file (number->string line))]
+    [else
+     (helix.debug-start *cargo-template*
+                        binary
+                        (request-filter request)
+                        file
+                        (number->string line))])
   (status! (string-append (request-filter request)
                           " at "
                           file
@@ -281,16 +302,25 @@
                         " to see why")))
 
 ;; Build the cargo target, then hand the binary cargo reported to
-;; at-binary!, which decides where to stop.
+;; at-binary!, which decides where to stop. A test target and a binary
+;; differ in the invocation and in which artifact to pick out of the JSON.
 (define (build-rust-then! request at-binary!)
-  (let ([arguments (build-arguments (request-get request 'relative-path))])
+  (let* ([binary? (equal? (request-get request 'kind) 'binary)]
+         [relative-path (request-get request 'relative-path)]
+         [arguments (if binary?
+                        (binary-build-arguments relative-path)
+                        (build-arguments relative-path))])
     (start-job!
      (string-append "building " (request-filter request))
      "cargo"
      (request-root request)
      arguments
      (lambda (output)
-       (let ([binary (if (string? output) (executable-from-cargo-output output) #f)])
+       (let ([binary (if (string? output)
+                         (if binary?
+                             (bin-executable-from-cargo-output output)
+                             (executable-from-cargo-output output))
+                         #f)])
          (if binary
              (at-binary! binary)
              (report-build-failure! request (string-append "cargo " (string-join arguments " ")))))))))
@@ -331,21 +361,57 @@
                (lambda (binary)
                  (launch! request binary (request-file request) (request-line request)))))
 
+;; Run a test and report libtest's summary. A binary has no summary, so it
+;; reports the last line the program printed instead, which is the useful
+;; part of a program run from an editor.
 (define (run-request! request)
   (set! *last-request* request)
-  (if (equal? (request-get request 'language) 'cpp)
-      (fail! "running without a debugger is rust only so far; use test-debug")
-      (start-job!
-       (string-append "running " (request-filter request))
-       "cargo"
-       (request-root request)
-       (run-arguments (request-get request 'relative-path) (request-filter request))
-       (lambda (output)
-         (let ([outcome (if (string? output) (test-outcome output) #f)])
-           (if outcome
-               (status! (string-append (request-filter request) ": " outcome))
-               (fail! (string-append (request-filter request)
-                                     " printed no result; the build probably failed"))))))))
+  (cond
+    [(equal? (request-get request 'language) 'cpp)
+     (fail! "running without a debugger is rust only so far; use test-debug")]
+    [(equal? (request-get request 'kind) 'binary) (run-binary! request)]
+    [else
+     (start-job!
+      (string-append "running " (request-filter request))
+      "cargo"
+      (request-root request)
+      (run-arguments (request-get request 'relative-path) (request-filter request))
+      (lambda (output)
+        (let ([outcome (if (string? output) (test-outcome output) #f)])
+          (if outcome
+              (status! (string-append (request-filter request) ": " outcome))
+              (fail! (string-append (request-filter request)
+                                    " printed no result; the build probably failed"))))))]))
+
+;; Last non-blank line of some output, or #f.
+(define (last-line text)
+  (let loop ([lines (source-lines text)] [found #f])
+    (if (empty? lines)
+        found
+        (loop (cdr lines)
+              (if (equal? (trim (car lines)) "") found (trim (car lines)))))))
+
+(define (run-binary! request)
+  (start-job!
+   (string-append "running " (request-filter request))
+   "cargo"
+   (request-root request)
+   (binary-run-arguments (request-get request 'relative-path))
+   (lambda (output)
+     (let ([tail (if (string? output) (last-line output) #f)])
+       (cond
+         [(not (string? output))
+          (fail! (string-append "could not run " (request-filter request)))]
+         [(panic-location output)
+          (let ([location (panic-location output)])
+            (fail! (string-append (request-filter request)
+                                  " panicked at "
+                                  (car location)
+                                  ":"
+                                  (number->string (car (cdr location)))
+                                  "; test-debug-failure stops there")))]
+         [tail (status! (string-append (request-filter request) ": " tail))]
+         [else (status! (string-append (request-filter request) " printed nothing"))])))))
 
 ;; Write the buffer before building, so cargo compiles the code on screen.
 ;; An unsaved edit otherwise shifts every line the breakpoint was computed
@@ -468,31 +534,56 @@
 ;; resolves against the binary's debug info. Rust only: it reads libtest's
 ;; panic line.
 (define (debug-failure! request)
-  (if (equal? (request-get request 'language) 'cpp)
-      (fail! "debugging a failure is rust only so far; use test-debug")
-      (start-job!
-       (string-append "running " (request-filter request))
-       "cargo"
-       (request-root request)
-       (run-arguments (request-get request 'relative-path) (request-filter request))
-       (lambda (output)
-         (let ([outcome (if (string? output) (test-outcome output) #f)]
-               [location (if (string? output) (panic-location output) #f)])
-           (cond
-             [(not (outcome-failed? outcome))
-              (status! (string-append (request-filter request)
-                                      " passed, nothing to debug: "
-                                      (if outcome outcome "no result")))]
-             [(not location)
-              (fail! (string-append (request-filter request)
-                                    " failed but printed no panic location"))]
-             [else
-              (build-then! request
-                           (lambda (binary)
-                             (launch! request
-                                      binary
-                                      (base-name (car location))
-                                      (car (cdr location)))))]))))))
+  (cond
+    [(equal? (request-get request 'language) 'cpp)
+     (fail! "debugging a failure is rust only so far; use test-debug")]
+    ;; A binary has no libtest summary, so a panic line is the whole
+    ;; signal: it panicked or it did not.
+    [(equal? (request-get request 'kind) 'binary)
+     (start-job!
+      (string-append "running " (request-filter request))
+      "cargo"
+      (request-root request)
+      (binary-run-arguments (request-get request 'relative-path))
+      (lambda (output)
+        (let ([location (if (string? output) (panic-location output) #f)])
+          (cond
+            [(not (string? output))
+             (fail! (string-append "could not run " (request-filter request)))]
+            [(not location)
+             (status! (string-append (request-filter request)
+                                     " did not panic, nothing to debug"))]
+            [else
+             (build-then! request
+                          (lambda (binary)
+                            (launch! request
+                                     binary
+                                     (base-name (car location))
+                                     (car (cdr location)))))]))))]
+    [else
+     (start-job!
+      (string-append "running " (request-filter request))
+      "cargo"
+      (request-root request)
+      (run-arguments (request-get request 'relative-path) (request-filter request))
+      (lambda (output)
+        (let ([outcome (if (string? output) (test-outcome output) #f)]
+              [location (if (string? output) (panic-location output) #f)])
+          (cond
+            [(not (outcome-failed? outcome))
+             (status! (string-append (request-filter request)
+                                     " passed, nothing to debug: "
+                                     (if outcome outcome "no result")))]
+            [(not location)
+             (fail! (string-append (request-filter request)
+                                   " failed but printed no panic location"))]
+            [else
+             (build-then! request
+                          (lambda (binary)
+                            (launch! request
+                                     binary
+                                     (base-name (car location))
+                                     (car (cdr location)))))]))))]))
 
 ;;@doc
 ;; Run the test under the cursor and, if it fails, debug it stopped at the
@@ -712,6 +803,11 @@
       (list (check "template"
                    (template-present? text *cargo-template*)
                    (string-append "no \"" *cargo-template* "\" template; see the README"))
+            (check "program template"
+                   (template-present? text *program-template*)
+                   (string-append "no \""
+                                  *program-template*
+                                  "\" template, so only tests can be debugged; see the README"))
             (adapter-check (debugger-command text)))))
 
 (define (cursor-checks)

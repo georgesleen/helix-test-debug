@@ -170,6 +170,16 @@ completion = [
   { name = "line" },
 ]
 args = { program = "{0}", args = [ "{1}", "--exact", "--include-ignored", "--test-threads=1", "--nocapture" ], preRunCommands = [ "breakpoint set --file {2} --line {3}" ] }
+
+[[language.debugger.templates]]
+name = "program at line"
+request = "launch"
+completion = [
+  { name = "binary", completion = "filename" },
+  { name = "source file" },
+  { name = "line" },
+]
+args = { program = "{0}", preRunCommands = [ "breakpoint set --file {1} --line {2}" ] }
 EOF
 
 # The line the cursor goes to: the test's declaration, which is what a user
@@ -412,4 +422,40 @@ kill -9 "$tracer" 2>/dev/null || true
 kill -9 "$stopped" 2>/dev/null || true
 stop_session
 
-echo "integration-check: test-run, test-debug, test-pick and debug-breakpoint work in helix"
+# :test-debug on a line that is not in a test. The crate's own binary is
+# what has to be stopped, not a test binary, so the assertion is on which
+# executable the debugger is holding.
+program_capture=$workdir/program.txt
+program_binary=$fixture/target/debug/fixture
+program_line=$(grep -n "let value" "$fixture/src/main.rs" | cut -d: -f1)
+[[ -n $program_line ]] || fail "no let value line in src/main.rs"
+
+(cd "$fixture" && cargo build --quiet) >"$workdir/prewarm-bin.txt" 2>&1 ||
+  fail "the fixture binary does not build" "$workdir/prewarm-bin.txt"
+
+# The session opens main.rs rather than lib.rs, and what counts as the
+# process to wait for is the binary rather than a test binary.
+export SOURCE_FILE=$fixture/src/main.rs
+binaries=$program_binary
+LINGER=60 DEADLINE=90 start_session "$program_capture" ":$program_line" ":test-debug"
+
+await_stopped "$program_capture" "test-debug on a binary"
+
+command_line=$(tr '\0' ' ' <"/proc/$stopped/cmdline")
+echo "integration-check: test-debug on a non-test line stopped $command_line"
+
+case " $command_line " in
+  *" $program_binary "*) ;;
+  *) fail "the stopped process is $command_line, not $program_binary" "$program_capture" ;;
+esac
+
+case " $command_line " in
+  *--exact*) fail "the binary was launched with test arguments: $command_line" "$program_capture" ;;
+  *) ;;
+esac
+
+kill -9 "$tracer" 2>/dev/null || true
+kill -9 "$stopped" 2>/dev/null || true
+stop_session
+
+echo "integration-check: tests, the picker, breakpoints and the binary path work in helix"

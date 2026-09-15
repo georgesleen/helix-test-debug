@@ -12,6 +12,7 @@
 (require "test-debug/rust/names.scm")
 (require "test-debug/rust/cargo.scm")
 (require "test-debug/rust/discover.scm")
+(require "test-debug/rust/binary.scm")
 
 (provide base-name
          breakpoints->text
@@ -35,6 +36,11 @@
          text->breakpoints
          toggle-breakpoint
          text-after
+         bin-executable-from-cargo-output
+         binary-build-arguments
+         binary-label
+         binary-run-arguments
+         binary-target-arguments
          breakpoint-line
          compiled-source?
          discovered-line
