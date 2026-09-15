@@ -167,8 +167,9 @@ export FIXTURE_TEST_LOG=$ran_log
 (cd "$fixture" && cargo test --lib --no-run --quiet) >"$workdir/prewarm.txt" 2>&1 ||
   fail "the fixture crate does not build" "$workdir/prewarm.txt"
 
-# The pty session, in its own process group so cleanup can take the whole
-# tree down. Keys are fed with pauses because helix reads stdin as it comes.
+# The pty session. Keys are fed with pauses because helix reads stdin as it
+# comes, and the deadline matters more than the quit: helix owns the pty, so
+# if it ignores the queued :q! the session must still end.
 cat >"$workdir/session.sh" <<'EOF'
 #!/usr/bin/env bash
 set -u
@@ -281,6 +282,10 @@ while [[ $waited -lt 60 ]]; do
 done
 
 if [[ -z $stopped ]]; then
+  raised=$(engine_error "$debug_capture")
+  if [[ -n $raised ]]; then
+    fail "test-debug raised: $raised" "$debug_capture"
+  fi
   if [[ -n $seen ]]; then
     fail "test-debug left $binaries* running but never stopped by a debugger" "$debug_capture"
   fi
