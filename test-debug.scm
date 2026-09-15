@@ -48,6 +48,7 @@
                   unity-breakpoint-line
                   unity-function-at-line
                   unity-test-registered?
+                  unity-tests-in-file
                   pio-build-arguments
                   pio-debug-build
                   pio-environment
@@ -626,16 +627,74 @@
                         'filter (discovered-name entry)
                         'line (discovered-line entry))))
 
+;; Every Unity test in a PlatformIO project, folder by folder. Each folder
+;; is its own program, so a picked test carries the folder it belongs to.
+(define (pio-tests root)
+  (let ([test-root (join-path root "test")])
+    (let loop ([folders (safe-read-dir test-root)] [found '()])
+      (if (empty? folders)
+          found
+          (let ([folder (car folders)])
+            (loop (cdr folders)
+                  (if (is-dir? folder)
+                      (append found (folder-tests root (base-name folder)))
+                      found)))))))
+
+;; The tests one folder defines. Registrations are gathered across the
+;; folder first, because the runner naming them is conventionally a
+;; different file from the one defining them.
+(define (folder-tests root folder)
+  (let* ([directory (join-path (join-path root "test") folder)]
+         [registrations (folder-registrations directory)])
+    (let loop ([entries (safe-read-dir directory)] [found '()])
+      (if (empty? entries)
+          found
+          (let* ([entry (car entries)]
+                 [text (if (is-dir? entry) #f (file-contents entry))])
+            (loop (cdr entries)
+                  (if (string? text)
+                      (append found
+                              (unity-tests-in-file (path-within root entry)
+                                                   (source-lines text)
+                                                   registrations))
+                      found)))))))
+
+;; Debug a Unity test that was picked rather than pointed at. The folder
+;; comes back out of the entry's path and the environment from the
+;; manifest, so nothing has to be remembered between the pick and the
+;; launch.
+(define (debug-picked-unity! root entry)
+  (let ([environment (pio-environment (or (file-contents (join-path root "platformio.ini")) ""))]
+        [folder (pio-test-folder (discovered-path entry))])
+    (if (not (and environment folder))
+        (fail! (string-append "cannot resolve a PlatformIO program for "
+                              (discovered-name entry)))
+        (debug-request! (hash 'language 'cpp
+                              'kind 'unity
+                              'root root
+                              'file (base-name (discovered-path entry))
+                              'filter (discovered-name entry)
+                              'line (discovered-line entry)
+                              'environment environment
+                              'folder folder
+                              'executable (join-path root (pio-program-path environment)))))))
+
 ;;@doc
-;; Pick a test from anywhere in the crate and debug it. Type to filter,
+;; Pick a test from anywhere in the project and debug it. Type to filter,
 ;; up and down to move, enter to debug, escape to dismiss.
 (define (test-pick)
-  (let ([path (focused-path)])
+  (let* ([path (focused-path)]
+         [pio (if (string? path) (pio-root path path-exists?) #f)])
     (cond
       [(not (string? path)) (fail! "this buffer has no file on disk")]
       [(job-running?) (fail! (string-append "already " *job-label*))]
+      [pio
+       (let ([entries (pio-tests pio)])
+         (if (empty? entries)
+             (fail! (string-append "nothing under " pio " calls RUN_TEST"))
+             (pick-test! entries (lambda (entry) (debug-picked-unity! pio entry)))))]
       [(not (equal? (language-for path) 'rust))
-       (fail! "picking a test is rust only so far; use test-debug")]
+       (fail! "picking a test needs a cargo crate or a PlatformIO project")]
       [else
        (let ([root (crate-root path path-exists?)])
          (if (not root)

@@ -15,7 +15,8 @@
 (provide run-test-names
          unity-breakpoint-line
          unity-function-at-line
-         unity-test-registered?)
+         unity-test-registered?
+         unity-tests-in-file)
 
 ;; The registration macro. Exactly this spelling: RUN_TEST_CASE and
 ;; MY_RUN_TEST are different macros and must not be mistaken for it.
@@ -110,3 +111,20 @@
 (define (unity-breakpoint-line declaration lines)
   (let ([found (cpp-breakpoint-line declaration lines)])
     (if found found (+ (clamp-line lines (+ declaration 1)) 1))))
+
+;; Every test the file defines, in declaration order, as
+;; (name relative-path line): the same shape crate discovery produces, so
+;; the picker never has to know which language it is showing.
+;;
+;; Being registered is what makes a definition a test, which is what keeps
+;; setUp, tearDown and the runner's main out of the list without naming
+;; them here.
+(define (unity-tests-in-file relative-path lines registrations)
+  (let loop ([index 0] [found '()])
+    (if (>= index (length lines))
+        (reverse found)
+        (let ([name (definition-name (list-ref lines index))])
+          (loop (+ index 1)
+                (if (and name (unity-test-registered? name registrations))
+                    (cons (list name relative-path (unity-breakpoint-line index lines)) found)
+                    found))))))

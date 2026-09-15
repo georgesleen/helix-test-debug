@@ -13,7 +13,7 @@ no test filter.
 | `:debug-here`, `:dbgh` | debug the line under the cursor: its test, or the crate's binary when the line is not in a test |
 | `:run-here` | run it without a debugger and report the result |
 | `:debug-failure` | run it, and if it fails debug it stopped where it panicked |
-| `:test-pick` | pick a test from anywhere in the crate and debug it |
+| `:test-pick` | pick a test from anywhere in the project and debug it |
 | `:debug-again` | repeat the last one from any buffer |
 | `:debug-cancel` | stop waiting on a build in flight |
 | `:debug-breakpoint` | toggle a breakpoint and remember it for this workspace |
@@ -236,6 +236,10 @@ knows tests, not programs, and the command says so rather than guessing.
 has no test attribute, so the cursor only names a candidate: a
 `RUN_TEST(name)` call anywhere in the same folder is what makes it a test,
 and the message says so when nothing does.
+
+`:test-pick` lists the whole project's Unity tests, gathering each folder's
+registrations first, since the runner that names a test is conventionally a
+different file from the one defining it.
 
 PlatformIO's unit of execution is the folder, not the function, so there is
 no filter to pass. The folder's program is built, the breakpoint on the

@@ -9,6 +9,8 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   stops in the test under the cursor. A `RUN_TEST` call in the folder is
   what makes a function a test, since Unity marks nothing. `:run-here` runs
   the folder and reports PlatformIO's summary.
+- `:test-pick` works in a PlatformIO project, listing the tests a RUN_TEST
+  call names across every test folder.
 - A workspace can declare a breakpoint budget, for targets with a fixed
   number of hardware breakpoints.
 - The commands are renamed: `:test-debug` is `:debug-here` (alias `:dbgh`),

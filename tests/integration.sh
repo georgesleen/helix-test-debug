@@ -513,6 +513,32 @@ else
   kill -9 "$tracer" 2>/dev/null || true
   kill -9 "$stopped" 2>/dev/null || true
   stop_session
+
+  # :test-pick in the same project. Registration is the authority, so the
+  # overlay must list exactly the three tests a RUN_TEST call names and
+  # leave the unregistered function out. The query selects the one test the
+  # cursor is not in, which is what separates the pick from the cursor.
+  pick_query=odd
+  pick_name=test_halves_odd_rounds_toward_zero
+  pio_pick_capture=$workdir/pio-pick.txt
+  LINGER=60 DEADLINE=90 start_session "$pio_pick_capture" ":1" ":test-pick" "$pick_query"
+
+  await_stopped "$pio_pick_capture" "test-pick in a PlatformIO project"
+
+  listed=$(screen "$pio_pick_capture" | grep -o "[0-9]* tests" | head -1 || true)
+  if [[ $listed != "3 tests" ]]; then
+    fail "the overlay listed \"$listed\", not the three registered tests" "$pio_pick_capture"
+  fi
+
+  if ! screen "$pio_pick_capture" | grep -q "$pick_name"; then
+    fail "the overlay never showed $pick_name" "$pio_pick_capture"
+  fi
+
+  echo "integration-check: test-pick listed $listed and launched $pick_name"
+
+  kill -9 "$tracer" 2>/dev/null || true
+  kill -9 "$stopped" 2>/dev/null || true
+  stop_session
 fi
 
 echo "integration-check: tests, the picker, breakpoints, the binary path and PlatformIO work in helix"

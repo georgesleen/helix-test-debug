@@ -28,6 +28,7 @@
          unity-breakpoint-line
          unity-function-at-line
          unity-test-registered?
+         unity-tests-in-file
          breakpoint-budget
          breakpoints->text
          budget-report

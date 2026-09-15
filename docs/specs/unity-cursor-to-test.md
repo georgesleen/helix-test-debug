@@ -68,3 +68,23 @@ does not land on the signature.
   declaration, clamped to the file, rather than a line past the end.
 - This is the same rule the GoogleTest path uses, and deliberately so: the
   two differ in how a test is recognised, not in where to stop.
+
+## `(unity-tests-in-file relative-path lines registrations)`
+
+Every test the file defines, in declaration order, for the picker.
+
+An entry is `(name relative-path line)`, the same shape crate discovery
+produces and read with the same accessors, so the picker never has to know
+which language it is showing.
+
+- A definition counts only when `registrations` names it, which is what
+  keeps `setUp`, `tearDown` and the runner's `main` out of the list without
+  naming them here.
+- `line` is `unity-breakpoint-line` for that definition, so picking a test
+  stops in the same place as putting the cursor in it.
+- A registered name with no definition in this file is not an entry: the
+  registration says it exists, this function says where it is.
+- The empty list for no lines, for no registrations, and for a file whose
+  definitions are all unregistered.
+- Duplicates in `registrations` do not duplicate entries; the file's
+  definitions are what is enumerated.
