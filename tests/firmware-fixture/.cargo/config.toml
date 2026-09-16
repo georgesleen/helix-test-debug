@@ -1,0 +1,6 @@
+# Fixture for the embedded path in tests/integration.sh. The runner is what
+# makes the cog treat this crate as firmware; no [build] target is declared,
+# so the crate still compiles for the host and the check can watch what the
+# editor sends an adapter without a probe attached.
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "probe-rs run --chip RP235x --protocol swd"

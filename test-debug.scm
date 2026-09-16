@@ -89,6 +89,12 @@
 ;; are positional, so one with no filter has to be its own template.
 (define *program-template* "program at line")
 
+;; An embedded target, flashed by probe-rs, taking only the ELF. probe-rs
+;; has no preRunCommands, so the breakpoint cannot ride in the launch: it
+;; is placed in helix first, and helix sends it once the adapter reports
+;; itself initialised.
+(define *firmware-template* "firmware")
+
 ;; Cargo is polled from the editor thread this often, and abandoned after
 ;; this many polls.
 (define *poll-interval-ms* 250)
@@ -164,11 +170,20 @@
 ;; that is not in a test is not a failure: the breakpoint machinery does not
 ;; care, so the crate's binary is built instead and stopped at the cursor
 ;; itself rather than at the first line of a body.
+;; The runner a crate declares, or #f. Read on each resolution rather than
+;; cached: a project gains one the moment it is pointed at hardware.
+(define (crate-runner root)
+  (cargo-runner (or (file-contents (join-path root ".cargo/config.toml")) "")))
+
 (define (rust-request path lines line)
   (let ([test (test-at-line lines line)]
         [root (crate-root path path-exists?)])
     (cond
       [(not root) (string-append "no Cargo.toml above " (base-name path))]
+      [(and test (probe-rs-runner? (crate-runner root)))
+       (string-append "debugging one test on "
+                      (or (runner-chip (crate-runner root)) "the target")
+                      " needs a debug console, which helix has no command for; run-here runs it")]
       [test
        (let ([relative-path (path-within root path)])
          (hash 'language 'rust
@@ -178,6 +193,26 @@
                'file (base-name path)
                'filter (qualified-test-name relative-path lines test)
                'line (breakpoint-line (test-declaration-line test))))]
+      ;; An embedded crate cannot be launched locally. Its binary runs on
+      ;; the target, and one of its tests cannot even be selected, because
+      ;; naming a test is a debug-console command and helix has no way to
+      ;; send one. Saying so beats flashing the wrong thing.
+      [(and (probe-rs-runner? (crate-runner root))
+            (not (runner-chip (crate-runner root))))
+       (string-append "the runner in "
+                      root
+                      "/.cargo/config.toml names no --chip, "
+                      "so the launch cannot say which target to flash")]
+      [(probe-rs-runner? (crate-runner root))
+       (let ([relative-path (path-within root path)])
+         (hash 'language 'rust
+               'kind 'firmware
+               'root root
+               'relative-path relative-path
+               'file (base-name path)
+               'filter (runner-chip (crate-runner root))
+               'chip (runner-chip (crate-runner root))
+               'line (+ line 1)))]
       [else
        (let ([relative-path (path-within root path)])
          (hash 'language 'rust
@@ -356,6 +391,14 @@
     ;; template's arguments are positional and cannot be left out.
     [(equal? (request-get request 'kind) 'binary)
      (helix.debug-start *program-template* binary file (number->string line))]
+    ;; probe-rs takes no breakpoint in its launch request and drops the key
+    ;; silently, so the breakpoint is placed in helix and helix delivers it
+    ;; over setBreakpoints once the adapter is initialised.
+    [(equal? (request-get request 'kind) 'firmware)
+     (place-breakpoint! (join-path (request-root request)
+                                   (request-get request 'relative-path))
+                        line)
+     (helix.debug-start *firmware-template* binary (request-get request 'chip))]
     [else
      (helix.debug-start *cargo-template*
                         binary
@@ -379,7 +422,11 @@
 ;; at-binary!, which decides where to stop. A test target and a binary
 ;; differ in the invocation and in which artifact to pick out of the JSON.
 (define (build-rust-then! request at-binary!)
-  (let* ([binary? (equal? (request-get request 'kind) 'binary)]
+  (let* ([binary? (or (equal? (request-get request 'kind) 'binary)
+                      ;; Firmware builds exactly like a binary: the triple
+                      ;; comes from .cargo/config.toml, so cargo needs no
+                      ;; telling and the artifact is found the same way.
+                      (equal? (request-get request 'kind) 'firmware))]
          [relative-path (request-get request 'relative-path)]
          [arguments (if binary?
                         (binary-build-arguments relative-path)
@@ -467,6 +514,7 @@
     [(equal? (request-get request 'language) 'cpp)
      (fail! "running a ctest without a debugger is not supported yet; use debug-here")]
     [(equal? (request-get request 'kind) 'binary) (run-binary! request)]
+    [(equal? (request-get request 'kind) 'firmware) (run-firmware! request)]
     [else
      (start-job!
       (string-append "running " (request-filter request))
@@ -479,6 +527,23 @@
               (status! (string-append (request-filter request) ": " outcome))
               (fail! (string-append (request-filter request)
                                     " printed no result; the build probably failed"))))))]))
+
+;; Run on the target, through the runner the crate declares. cargo run
+;; flashes and runs; a test needs probe-rs's own flags, since it rejects
+;; --test-threads outright rather than ignoring it.
+(define (run-firmware! request)
+  (start-job!
+   (string-append "running on " (request-filter request))
+   "cargo"
+   (request-root request)
+   (binary-run-arguments (request-get request 'relative-path))
+   (lambda (output)
+     (let ([tail (if (string? output) (last-line output) #f)])
+       (cond
+         [(not (string? output))
+          (fail! (string-append "could not run on " (request-filter request)))]
+         [tail (status! (string-append (request-filter request) ": " tail))]
+         [else (status! (string-append (request-filter request) " printed nothing"))])))))
 
 ;; Run a test folder and report PlatformIO's summary. The folder is named
 ;; in the status because the run is not confined to the test at the cursor.
@@ -897,6 +962,16 @@
                                             (breakpoint-count-message (length toggled))
                                             " in this workspace"))
                     (fail! (string-append "could not write " (breakpoint-store root))))))))))
+
+;; Place a breakpoint in helix at an absolute file and one-based line.
+;; Helix can only toggle at the cursor, so the line has to be visited. A
+;; breakpoint already there is toggled back off; nothing exposes what helix
+;; holds, so that cannot be checked first.
+(define (place-breakpoint! file line)
+  (when (path-exists? file)
+    (helix.open file)
+    (helix.goto-line line)
+    (dap_toggle_breakpoint)))
 
 ;; Replay one breakpoint: helix only toggles at the cursor, so each file is
 ;; opened and visited in turn.

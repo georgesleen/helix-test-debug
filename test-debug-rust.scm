@@ -13,8 +13,15 @@
 (require "test-debug/rust/cargo.scm")
 (require "test-debug/rust/discover.scm")
 (require "test-debug/rust/binary.scm")
+(require "test-debug/rust/embedded.scm")
 
 (provide base-name
+         artifact-directory
+         cargo-build-target
+         embedded-run-arguments
+         cargo-runner
+         probe-rs-runner?
+         runner-chip
          breakpoint-budget
          breakpoints->text
          budget-report

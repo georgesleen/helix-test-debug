@@ -9,6 +9,10 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   stops in the test under the cursor. A `RUN_TEST` call in the folder is
   what makes a function a test, since Unity marks nothing. `:run-here` runs
   the folder and reports PlatformIO's summary.
+- Embedded targets: a crate with a probe-rs runner launches through
+  `probe-rs dap-server` with the chip its runner names, and the breakpoint
+  is delivered by Helix rather than by the launch, because probe-rs takes
+  none. Debugging a single embedded test is refused with its reason.
 - `:test-pick` works in a PlatformIO project, listing the tests a RUN_TEST
   call names across every test folder.
 - A workspace can declare a breakpoint budget, for targets with a fixed

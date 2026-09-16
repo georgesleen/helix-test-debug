@@ -254,6 +254,27 @@ the program runs to completion. PlatformIO takes those flags only from the
 environment, so the build runs under `sh`, with values reaching it through
 `"$@"` rather than the script text.
 
+## Embedded targets
+
+A crate whose `.cargo/config.toml` names a probe-rs runner is firmware, not
+a local program, and `:debug-here` treats it as such: it builds, then
+launches through `probe-rs dap-server`, naming the chip the runner names.
+A runner with no `--chip` is refused rather than guessed at, because the
+launch has to say what to flash.
+
+The breakpoint cannot ride in that launch. probe-rs has no
+`preRunCommands` and drops unknown keys silently, so the cog places the
+breakpoint in Helix first and Helix delivers it over `setBreakpoints` once
+the adapter reports itself initialised. That ordering is what the embedded
+phase of the integration check asserts, against a stub adapter: it proves
+what the editor sent, and nothing about flashing.
+
+Debugging one embedded *test* is refused with a reason. Selecting a test is
+a debug-console command, which is a DAP `evaluate` request, and neither
+Helix nor its Steel API can send one. `:run-here` does work: it runs on the
+target through the runner, without `--test-threads`, which probe-rs rejects
+outright rather than ignoring.
+
 ## Remembered breakpoints
 
 `:debug-breakpoint` toggles a breakpoint the way Helix's own

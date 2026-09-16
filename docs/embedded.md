@@ -10,6 +10,24 @@ of it has been run: this machine has no `probe-rs` installed and no probe
 attached, so anything implemented from these notes has to be verified
 against hardware before it can be believed.
 
+## The hardware this was checked against
+
+A Raspberry Pi Debug Probe and a Pico 2. Two corrections to the research
+above, both found by plugging them in:
+
+- A Pico 2 is **RP2350**, not RP2040, and probe-rs 0.32.0 calls it
+  `RP235x`, with `RP235x_riscv` for its Hazard3 cores. `RP2350` is not a
+  name in the registry. Its cores are Cortex-M33 rather than M0+, so the
+  four-breakpoint figure below is an RP2040 fact and does not carry over;
+  probe-rs reads the count from `BP_CTRL.NUM_CODE` on the target rather
+  than assuming, which is the answer that stays true either way.
+- The retail Debug Probe ships firmware older than probe-rs accepts:
+  `probe-rs info` finds the probe (`2e8a:000c-0:<serial>`) and then refuses
+  with *"The firmware on the probe is outdated, and not supported by
+  probe-rs. The minimum supported firmware version is 2.2.0."* So a debug
+  probe out of the box is not usable here until its `debugprobe.uf2` is
+  updated, which is worth knowing before writing anything against it.
+
 ## The shape of the problem
 
 The cog does four things. Only one of them breaks.

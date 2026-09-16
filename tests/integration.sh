@@ -541,4 +541,77 @@ else
   stop_session
 fi
 
-echo "integration-check: tests, the picker, breakpoints, the binary path and PlatformIO work in helix"
+# :debug-here in an embedded crate. There is no probe attached, so the
+# adapter is the stub in tests/stub-dap-adapter.py: it answers enough DAP for
+# helix to complete a launch and logs every message it receives. That proves
+# what the cog controls -- the launch it builds and the breakpoint helix
+# delivers -- and nothing about flashing, which is probe-rs's job.
+#
+# The fixture declares a probe-rs runner but no [build] target, so it still
+# compiles for the host and the ELF the launch names really exists.
+firmware_fixture=$root/tests/firmware-fixture
+firmware_source=$firmware_fixture/src/main.rs
+firmware_line=$(grep -n "ticks += 1" "$firmware_source" | cut -d: -f1)
+[[ -n $firmware_line ]] || fail "no ticks line in $firmware_source"
+
+cat >"$config/helix/languages.toml.firmware" <<EOF
+[[language]]
+name = "rust"
+
+[language.debugger]
+name = "stub"
+transport = "stdio"
+command = "$root/tests/stub-dap-adapter.py"
+
+[[language.debugger.templates]]
+name = "firmware"
+request = "launch"
+completion = [
+  { name = "elf", completion = "filename" },
+  { name = "chip" },
+]
+[language.debugger.templates.args]
+chip = "{1}"
+flashingConfig = { flashingEnabled = true, haltAfterReset = true }
+coreConfigs = [ { coreIndex = 0, programBinary = "{0}" } ]
+EOF
+cp "$config/helix/languages.toml" "$workdir/languages.toml.host"
+cp "$config/helix/languages.toml.firmware" "$config/helix/languages.toml"
+
+export DAP_STUB_LOG=$workdir/dap-stub.jsonl
+: >"$DAP_STUB_LOG"
+(cd "$firmware_fixture" && cargo build --quiet) >"$workdir/prewarm-firmware.txt" 2>&1 ||
+  fail "the firmware fixture does not build" "$workdir/prewarm-firmware.txt"
+
+firmware_capture=$workdir/firmware.txt
+export SOURCE_FILE=$firmware_source
+fixture=$firmware_fixture
+LINGER=30 DEADLINE=60 start_session "$firmware_capture" ":$firmware_line" ":debug-here"
+
+waited=0
+while ! grep -q '"command": *"setBreakpoints"' "$DAP_STUB_LOG" 2>/dev/null; do
+  sleep 1
+  waited=$((waited + 1))
+  if [[ $waited -gt 45 ]]; then
+    stop_session
+    fail "helix sent the adapter no setBreakpoints in 45s" "$firmware_capture"
+  fi
+done
+stop_session
+cp "$workdir/languages.toml.host" "$config/helix/languages.toml"
+
+launch=$(grep '"command": *"launch"' "$DAP_STUB_LOG" | tail -1)
+[[ -n $launch ]] || fail "the adapter received no launch request" "$firmware_capture"
+
+for expected in '"chip": *"RP235x"' 'firmware-fixture/target/debug/firmware-fixture' '"flashingEnabled": *true'; do
+  grep -qE "$expected" <<<"$launch" ||
+    fail "the launch is missing $expected: $launch" "$firmware_capture"
+done
+
+breakpoints=$(grep '"command": *"setBreakpoints"' "$DAP_STUB_LOG" | tail -1)
+grep -qE "\"line\": *$firmware_line" <<<"$breakpoints" ||
+  fail "helix sent no breakpoint on line $firmware_line: $breakpoints" "$firmware_capture"
+
+echo "integration-check: the embedded launch named RP235x and helix sent a breakpoint on line $firmware_line"
+
+echo "integration-check: tests, the picker, breakpoints, the binary path, PlatformIO and the embedded launch work in helix"

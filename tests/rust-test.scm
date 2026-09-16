@@ -882,4 +882,150 @@
 (check-equal! "an integration test selects no binary" "the binary" (binary-label "tests/skeleton.rs"))
 (check-equal! "a bare file selects no binary" "the binary" (binary-label "build.rs"))
 
+;; Embedded cargo detection, from docs/specs/embedded-cargo.md. Shaped like
+;; a real `.cargo/config.toml` for an RP2040 crate: the runner lives under a
+;; `cfg(...)` target section whose *header* contains both the word `target`
+;; and an `=`, and the default triple lives under `[build]`.
+(define embedded-config
+  (string-append
+   "[target.'cfg(all(target_arch = \"arm\", target_os = \"none\"))']\n"
+   "runner = \"probe-rs run --chip RP2040 --protocol swd\"\n"
+   "rustflags = [\"-C\", \"link-arg=--nmagic\"]\n"
+   "\n"
+   "[build]\n"
+   "target = \"thumbv6m-none-eabi\"\n"
+   "\n"
+   "[env]\n"
+   "DEFMT_LOG = \"debug\"\n"))
+
+;; A host crate: a `[build]` section that declares no triple, and a `target`
+;; assignment in a section that is not `[build]`.
+(define host-config
+  (string-append
+   "[build]\n"
+   "rustflags = [\"-C\", \"target-cpu=native\"]\n"
+   "\n"
+   "[alias]\n"
+   "t = \"test --all-features\"\n"
+   "\n"
+   "[target.thumbv6m-none-eabi]\n"
+   "target = \"thumbv6m-none-eabi\"\n"))
+
+;; cargo-runner: what the config declares, and what it must not read as a
+;; declaration
+(check-equal! "runner under a cfg target section"
+              "probe-rs run --chip RP2040 --protocol swd"
+              (cargo-runner embedded-config))
+(check-equal! "the first assignment wins"
+              "probe-rs run --chip RP2040"
+              (cargo-runner (string-append
+                             "runner = \"probe-rs run --chip RP2040\"\n"
+                             "runner = \"qemu-system-arm -machine mps2-an385\"\n")))
+(check-equal! "no space around the equals"
+              "probe-rs run"
+              (cargo-runner "runner=\"probe-rs run\"\n"))
+(check-equal! "generous space around the equals"
+              "probe-rs run"
+              (cargo-runner "runner   =   \"probe-rs run\"\n"))
+(check-equal! "leading whitespace is tolerated"
+              "probe-rs run"
+              (cargo-runner "    runner = \"probe-rs run\"\n"))
+(check-equal! "the contents are kept verbatim"
+              "probe-rs  run --chip RP2040   --protocol swd"
+              (cargo-runner "runner = \"probe-rs  run --chip RP2040   --protocol swd\"\n"))
+;; Opposite rule to RUN_TEST detection, and deliberately so: a false
+;; positive there costs a test that will not run, a false positive here
+;; sends every launch to a debug probe that is not attached.
+(check-equal! "a commented-out assignment is skipped, the live one is read"
+              "probe-rs run --chip RP2040"
+              (cargo-runner (string-append
+                             "# runner = \"qemu-system-arm -machine mps2-an385\"\n"
+                             "runner = \"probe-rs run --chip RP2040\"\n")))
+(check-false! "a config whose only assignment is commented out declares nothing"
+              (cargo-runner "# runner = \"probe-rs run --chip RP2040\"\n"))
+(check-false! "an indented comment is still a comment"
+              (cargo-runner "    # runner = \"probe-rs run\"\n"))
+(check-false! "no runner anywhere" (cargo-runner host-config))
+(check-false! "the empty string declares nothing" (cargo-runner ""))
+;; TOML basic strings are double quoted; a single-quoted value is a literal
+;; string, which this deliberately does not recognise.
+(check-false! "single quotes are not the quotes that count"
+              (cargo-runner "runner = 'probe-rs run --chip RP2040'\n"))
+
+;; probe-rs-runner?: the first word decides, because building a probe-rs
+;; launch for some other tool would be worse than not recognising it
+(check-true! "a plain probe-rs runner" (probe-rs-runner? "probe-rs run --chip RP2040"))
+(check-true! "probe-rs with no arguments" (probe-rs-runner? "probe-rs"))
+(check-true! "an absolute path to probe-rs still counts"
+             (probe-rs-runner? "/home/george-sleen/.cargo/bin/probe-rs run --chip RP2040"))
+(check-true! "an absolute path with no arguments"
+             (probe-rs-runner? "/usr/local/bin/probe-rs"))
+(check-false! "no runner at all" (probe-rs-runner? #f))
+(check-false! "the empty runner" (probe-rs-runner? ""))
+(check-false! "an emulator is not a probe" (probe-rs-runner? "qemu-system-arm -machine mps2-an385"))
+(check-false! "cargo run is not a probe" (probe-rs-runner? "cargo run"))
+;; The word appears, but not as the program being run.
+(check-false! "probe-rs later in the command line does not count"
+              (probe-rs-runner? "cargo run --features probe-rs"))
+;; The path rule is `/probe-rs`, so a program merely ending in those
+;; characters is a different program.
+(check-false! "a program whose name merely ends in probe-rs"
+              (probe-rs-runner? "my-probe-rs run --chip RP2040"))
+
+;; runner-chip: missing information rather than an error, because probe-rs
+;; can detect a chip itself
+(check-equal! "a separate --chip argument"
+              "RP2040"
+              (runner-chip "probe-rs run --chip RP2040 --protocol swd"))
+(check-equal! "the joined form names the same chip"
+              "RP2040"
+              (runner-chip "probe-rs run --chip=RP2040 --protocol swd"))
+(check-equal! "the chip is the last argument"
+              "RP2040"
+              (runner-chip "probe-rs run --chip RP2040"))
+;; probe-rs matches case insensitively but reports the canonical spelling,
+;; so echoing what the project wrote is what makes a status line
+;; recognisable.
+(check-equal! "case is preserved verbatim"
+              "nRF52840_xxAA"
+              (runner-chip "probe-rs run --chip nRF52840_xxAA"))
+(check-equal! "case is preserved in the joined form"
+              "nRF52840_xxAA"
+              (runner-chip "probe-rs run --chip=nRF52840_xxAA"))
+(check-false! "no --chip at all" (runner-chip "probe-rs run --protocol swd"))
+(check-false! "--chip with nothing after it" (runner-chip "probe-rs run --chip"))
+
+;; cargo-build-target: the default triple, which is what puts a segment in
+;; the artifact path
+(check-equal! "the triple under [build]"
+              "thumbv6m-none-eabi"
+              (cargo-build-target embedded-config))
+;; The `[target.'cfg(...)']` header contains the word `target` and an `=`
+;; from `target_arch = "arm"`, and must not be read as the default target.
+(check-false! "a cfg target section header is not the default target"
+              (cargo-build-target
+               (string-append
+                "[target.'cfg(all(target_arch = \"arm\", target_os = \"none\"))']\n"
+                "runner = \"probe-rs run --chip RP2040\"\n")))
+(check-false! "a target assignment outside [build] is not the default target"
+              (cargo-build-target host-config))
+(check-false! "a [build] section that declares no triple"
+              (cargo-build-target "[build]\nrustflags = [\"-C\", \"target-cpu=native\"]\n"))
+(check-false! "no sections at all" (cargo-build-target ""))
+
+;; artifact-directory: where cargo left the ELF, relative to the crate root
+(check-equal! "a cross build gains a triple segment"
+              "target/thumbv6m-none-eabi/debug"
+              (artifact-directory "thumbv6m-none-eabi" "debug"))
+(check-equal! "the host layout has no triple segment"
+              "target/debug"
+              (artifact-directory #f "debug"))
+;; The profile is appended verbatim, so no second function is needed.
+(check-equal! "the release profile of a cross build"
+              "target/thumbv6m-none-eabi/release"
+              (artifact-directory "thumbv6m-none-eabi" "release"))
+(check-equal! "the release profile of a host build"
+              "target/release"
+              (artifact-directory #f "release"))
+
 (finish!)
