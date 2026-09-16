@@ -5,6 +5,15 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 
 ## Unreleased
 
+- Verified on a second architecture: an ESP32-S3 over its built-in
+  USB-JTAG, with a real ESP-IDF project. `make hardware-check` takes
+  `HARDWARE_REQUEST=attach` for it, which is the only thing that works on
+  that target -- a launching template's breakpoint is cleared by the
+  bootloader's CPU reset on the way to the app. See docs/embedded.md.
+- `make hardware-check` reports an adapter that refused to start, with the
+  adapter's own message, instead of waiting out its timeout. The usual
+  cause is a probe that cannot serve the requested chip, which `probe-rs
+  list` finding *a* probe does not rule out.
 - Ambiguity is refused rather than guessed at, everywhere it can arise. A
   PlatformIO project with two boards says so and points at `default_envs`;
   a cargo build with several binaries is resolved by which one's own source

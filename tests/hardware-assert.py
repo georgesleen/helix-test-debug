@@ -49,11 +49,17 @@ def read_json(path):
 
 
 def executables(build, source):
-    """Every non-imported executable whose sources include `source`.
+    """Every non-imported executable that reaches `source`.
+
+    Derived from CMake's file API the same way the cog derives it, but
+    implemented separately, so the two agreeing is evidence.
 
     A real SDK build has several executables -- the Pico SDK's codemodel
     also names picotool, pioasm and a boot stage -- so the one to flash is
-    the one that compiles the file being debugged.
+    the one that compiles the file being debugged. And a build system may
+    compile that file into a library instead: ESP-IDF puts main.c in its
+    __idf_main component and builds the ELF from a generated empty source,
+    so the link graph is what connects them.
     """
     reply = os.path.join(build, ".cmake", "api", "v1", "reply")
     indexes = sorted(glob.glob(os.path.join(reply, "index-*.json")))
@@ -67,15 +73,39 @@ def executables(build, source):
 
     found = []
     for configuration in codemodel.get("configurations", []):
+        targets = {}
         for entry in configuration.get("targets", []):
             target = read_json(os.path.join(reply, entry.get("jsonFile", ""))) or {}
+            if target.get("id"):
+                targets[target["id"]] = target
+
+        def reaches(target):
+            seen, pending = set(), [target]
+            while pending:
+                current = pending.pop()
+                identifier = current.get("id")
+                if identifier in seen:
+                    continue
+                seen.add(identifier)
+                if any(s.get("path") == source for s in current.get("sources", [])):
+                    return True
+                for dependency in current.get("dependencies", []):
+                    linked = targets.get(dependency.get("id"))
+                    if linked:
+                        pending.append(linked)
+            return False
+
+        for target in targets.values():
             if target.get("type") != "EXECUTABLE" or target.get("imported"):
                 continue
-            paths = [s.get("path") for s in target.get("sources", [])]
-            if source in paths:
-                artifacts = target.get("artifacts", [])
-                if artifacts:
-                    found.append((target.get("name"), artifacts[0].get("path")))
+            artifacts = target.get("artifacts", [])
+            if artifacts and reaches(target):
+                found.append((target.get("name"), artifacts[0].get("path")))
+        # Configurations are alternatives, not additions: a multi-config
+        # generator describes the same target in each, so the first that
+        # answers is the answer.
+        if found:
+            return found
     return found
 
 
@@ -90,20 +120,24 @@ def main():
 
     owners = executables(build, source)
     if len(owners) != 1:
-        fail("%d executables compile %s, so this check cannot say which is right"
+        fail("%d executables reach %s, so this check cannot say which is right"
              % (len(owners), source))
     expected = os.path.join(build, owners[0][1])
 
-    launches = [m for m in requests if m.get("command") == "launch"]
-    if not launches:
-        fail("helix sent no launch")
-    cores = launches[-1].get("arguments", {}).get("coreConfigs", [])
+    # An attach carries the same image and core configuration as a launch;
+    # only whether the adapter flashes it differs, which is the template's
+    # business and not this check's.
+    starts = [m for m in requests if m.get("command") in ("launch", "attach")]
+    if not starts:
+        fail("helix sent neither a launch nor an attach")
+    cores = starts[-1].get("arguments", {}).get("coreConfigs", [])
     if not cores:
-        fail("the launch named no core: %r" % launches[-1].get("arguments"))
-    flashed = cores[0].get("programBinary")
-    if flashed != expected:
-        fail("flashed %s, but the file API says %s compiles %s"
-             % (flashed, expected, source))
+        fail("the %s named no core: %r"
+             % (starts[-1].get("command"), starts[-1].get("arguments")))
+    named = cores[0].get("programBinary")
+    if named != expected:
+        fail("the %s named %s, but the file API says %s reaches %s"
+             % (starts[-1].get("command"), named, expected, source))
 
     verified = [
         breakpoint
@@ -133,15 +167,20 @@ def main():
         if m.get("command") == "stackTrace" and m.get("success")
         for frame in m.get("body", {}).get("stackFrames", [])
     ]
+    # The frame has to be in the file under the cursor: that is what proves
+    # the core stopped in the user's own code. Its line is reported rather
+    # than asserted, because the line table is the compiler's business -- an
+    # ESP-IDF build is -Og by default, and the increment inside a loop maps
+    # to the loop head. The address equality above is the exact check.
     here = [
         frame
         for frame in frames
-        if frame.get("line") == line
-        and frame.get("source", {}).get("path") == source_file
+        if frame.get("source", {}).get("path") == source_file
     ]
     if not here:
-        fail("no frame reported %s:%d; the image's line table disagrees with the editor"
-             % (source_file, line))
+        fail("no frame reported %s; the core stopped outside the file under the cursor: %r"
+             % (source_file, [(f.get("name"), (f.get("source") or {}).get("path")) for f in frames]))
+    reported = here[-1].get("line")
 
     variables = [
         variable
@@ -153,9 +192,15 @@ def main():
     if not readable:
         fail("no variable was readable from the target")
 
-    print("hardware-check: flashed %s, bound %s:%d at %s, stopped there, read %s"
-          % (os.path.basename(flashed), os.path.basename(source_file), line, address,
-             ", ".join("%s = %s" % (v["name"], v["value"]) for v in readable[:3])))
+    print("hardware-check: %s %s, bound %s:%d at %s, stopped in %s at line %s, read %s"
+          % (starts[-1].get("command"),
+             os.path.basename(named),
+             os.path.basename(source_file),
+             line,
+             address,
+             here[-1].get("name"),
+             reported,
+             ", ".join("%s = %s" % (v["name"], v["value"]) for v in readable[:2])))
 
 
 if __name__ == "__main__":

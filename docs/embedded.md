@@ -38,6 +38,44 @@ above, both found by plugging them in:
   a breakpoint stop at the exact verified address. Helix read `ticks = 0`
   from target RAM.
 
+## The ESP32-S3, which is Xtensa and needs no wiring
+
+An ESP32-S3 has no SWD at all: Xtensa debugs over JTAG, and an S3 carries a
+USB-Serial/JTAG peripheral on GPIO19 and GPIO20, so its native USB port
+*is* the debug interface. `probe-rs list` reports it as `ESP JTAG`, and
+unlike RP235x, `probe-rs info` autodetects `esp32s3`. The Raspberry Pi
+Debug Probe is useless here: it speaks SWD only.
+
+Findings from running the whole path against one, on 2026-09-16:
+
+- **A launching template cannot hold a breakpoint through an ESP-IDF
+  boot.** With `haltAfterReset` the core stops at the Xtensa reset vector
+  `0x40000400`, the breakpoint verifies, and then never fires: the
+  bootloader resets the CPU on its way to the app, which clears the
+  breakpoint registers. Serial output proves the app itself runs
+  (`Loaded app from partition at offset 0x10000`), so this is the debug
+  registers being cleared rather than the image failing to boot.
+- **Attaching to the running app works.** `request = "attach"` with no
+  flashing options: the breakpoint is placed after boot, verifies at
+  `0x42008EFB`, and the core halts on it -- `Halted on breakpoint
+  (Hardware) @0x42008efb` -- repeatedly, since the fixture loops. This is
+  what `lib.probeRsFirmwareAttachTemplate` is for.
+- probe-rs **rejects** an attach request carrying any flashing option
+  rather than ignoring it, so the attach template omits `flashingConfig`
+  entirely.
+- probe-rs can flash a full ESP-IDF image itself, given the pieces:
+  `--binary-format idf --idf-bootloader … --idf-partition-table …`. It took
+  4s. An app image alone is not bootable, which is why the flashing half is
+  left to `idf.py flash` and the session only attaches.
+- ESP-IDF builds `-Og` by default, so the stop lands on the enclosing
+  `while` rather than the incremented line: the frame says `app_main` at
+  line 7 for a breakpoint verified at line 8. The address is exact; the
+  line table is the compiler's. Same class as the Pico SDK's inlined-header
+  case.
+- An attach also means the flashed image and the ELF must still correspond.
+  Rebuilding from scratch between flashing and attaching moves addresses,
+  and the breakpoint then sits on code the target is not running.
+
 ## The shape of the problem
 
 The cog does four things. Only one of them breaks.

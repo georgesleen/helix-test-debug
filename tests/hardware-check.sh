@@ -14,6 +14,15 @@
 #   HARDWARE_MARKER   line to stop on, a grep pattern (default "ticks += 1")
 #   HARDWARE_CMAKE    extra configure arguments
 #   HARDWARE_FLASHING whether the launch flashes    (default true)
+#   HARDWARE_REQUEST  launch or attach              (default launch)
+#
+# HARDWARE_REQUEST=attach is for a target already running its own image,
+# and on an ESP32-S3 it is the only thing that works: a launch reset-halts
+# the core at the reset vector, and the ESP-IDF bootloader resets the CPU
+# on its way to the app, which clears the breakpoint registers. Attaching
+# to the running app sets the breakpoint after all of that. probe-rs
+# rejects an attach request carrying any flashing option, so the template
+# omits them entirely.
 #
 # HARDWARE_FLASHING=false is for a target whose image the adapter cannot
 # build by itself: an ESP-IDF app needs a bootloader and a partition table
@@ -39,6 +48,7 @@ source_name=${HARDWARE_SOURCE:-main.c}
 marker=${HARDWARE_MARKER:-ticks += 1}
 extra_cmake=${HARDWARE_CMAKE:-}
 flashing=${HARDWARE_FLASHING:-true}
+request=${HARDWARE_REQUEST:-launch}
 
 project=$(cd "$project" && pwd)
 source_file=$project/$source_name
@@ -147,11 +157,21 @@ line=$(grep -n "$marker" "$source_file" | head -1 | cut -d: -f1)
 
 # Configured here rather than left to the cog so a failure to configure is
 # reported as itself. The cog reconfigures the same directory on launch.
-rm -rf "$build"
-# shellcheck disable=SC2086
-cmake -S "$project" -B "$build" -DCMAKE_BUILD_TYPE=Debug $extra_cmake \
-  >"$workdir/configure.txt" 2>&1 ||
-  fail "$project does not configure" "$workdir/configure.txt"
+#
+# An attach must not start from a clean build directory. The image on the
+# target was flashed from a particular ELF, and rebuilding from scratch can
+# move the addresses the breakpoint is placed at, so the breakpoint would
+# sit on code the target is not running. An incremental build of unchanged
+# sources is a no-op and keeps that correspondence.
+if [[ $request == launch ]]; then
+  rm -rf "$build"
+fi
+if [[ ! -f $build/CMakeCache.txt ]]; then
+  # shellcheck disable=SC2086
+  cmake -S "$project" -B "$build" -DCMAKE_BUILD_TYPE=Debug $extra_cmake \
+    >"$workdir/configure.txt" 2>&1 ||
+    fail "$project does not configure" "$workdir/configure.txt"
+fi
 
 mkdir -p "$config/helix/cogs"
 cp "$root/test-debug.scm" "$root/test-debug-rust.scm" "$root/test-debug-cpp.scm" \
@@ -174,11 +194,13 @@ tee "$requests" | $adapter "\$@" | tee "$responses"
 EOF
 chmod +x "$workdir/adapter.sh"
 
-# haltAfterReset is what makes the core stop before main, so the breakpoint
+# For a launch, haltAfterReset stops the core before main so the breakpoint
 # is programmed while it is halted rather than raced against a running one.
-# A template for another adapter may name its target differently; the cog
-# passes the image and the chip and does not care.
-cat >"$config/helix/languages.toml" <<EOF
+# An attach carries none of that, since probe-rs refuses flashing options
+# on an attach request. A template for another adapter may name its target
+# differently; the cog passes the image and the chip and does not care.
+{
+  cat <<EOF
 [[language]]
 name = "c"
 
@@ -189,16 +211,19 @@ command = "$workdir/adapter.sh"
 
 [[language.debugger.templates]]
 name = "firmware"
-request = "launch"
+request = "$request"
 completion = [
   { name = "elf", completion = "filename" },
   { name = "chip" },
 ]
 [language.debugger.templates.args]
 chip = "$chip"
-flashingConfig = { flashingEnabled = $flashing, haltAfterReset = true }
 coreConfigs = [ { coreIndex = 0, programBinary = "{0}" } ]
 EOF
+  if [[ $request == launch ]]; then
+    echo "flashingConfig = { flashingEnabled = $flashing, haltAfterReset = true }"
+  fi
+} >"$config/helix/languages.toml"
 
 cat >"$workdir/session.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -236,10 +261,23 @@ while [[ ! -s $session_pid_file ]]; do
   [[ $waited -gt 50 ]] && fail "the pty session did not start" "$capture"
 done
 
-# Wait for the stop that matters. The first stopped event is the reset halt,
-# so this waits for the breakpoint one specifically.
+# Wait for the stop that matters. A launch stops first at the reset halt,
+# so this waits for a breakpoint stop specifically.
 waited=0
-while ! grep -aq '"reason":"breakpoint"' "$responses" 2>/dev/null; do
+while ! grep -aqE '"reason": *"breakpoint"' "$responses" 2>/dev/null; do
+  # An adapter that has already refused will never produce a stop, and its
+  # own message says why far better than a timeout does. The usual cause is
+  # a probe that cannot serve the requested chip: `probe-rs list` finding
+  # *a* probe is not the same as finding this target's.
+  #
+  # The spacing is loose because adapters serialise json to their own
+  # taste; probe-rs writes `"command": "launch"`.
+  if grep -aqE '"command": *"(launch|attach)"[^}]*"success": *false|"success": *false[^}]*"command": *"(launch|attach)"' \
+    "$responses" 2>/dev/null; then
+    stop_session
+    fail "the adapter refused to start: $(grep -aoE '"response_message": *"[^"]*"' "$responses" | tail -1)" \
+      "$capture"
+  fi
   sleep 1
   waited=$((waited + 1))
   if [[ $waited -gt 70 ]]; then
@@ -247,7 +285,22 @@ while ! grep -aq '"reason":"breakpoint"' "$responses" 2>/dev/null; do
     fail "no breakpoint stop from the target in 70s" "$capture"
   fi
 done
-sleep 6
+
+# Then wait for the session to have asked for variables, rather than for a
+# fixed few seconds. With an attach the first breakpoint stop arrives
+# almost immediately, long before the session has sent :debug-variables,
+# and killing the editor on a timer cut it off -- which read as the target
+# having nothing readable on it.
+waited=0
+while ! grep -aqE '"command": *"variables"' "$responses" 2>/dev/null; do
+  sleep 1
+  waited=$((waited + 1))
+  if [[ $waited -gt 60 ]]; then
+    stop_session
+    fail "the session never asked the target for variables" "$capture"
+  fi
+done
+sleep 2
 stop_session
 
 python3 "$root/tests/hardware-assert.py" \
