@@ -676,6 +676,47 @@ else
     fail "no breakpoint on line $cmake_line" "$cmake_capture"
 
   echo "integration-check: CMake selected blinky.c's image among two executables and sent a breakpoint on line $cmake_line"
+
+  # The same project, but stopping in a line that is compiled into the
+  # static library rather than into the executable. This is how ESP-IDF
+  # builds a project's own sources -- main.c goes into the __idf_main
+  # component and the executable is built from a generated empty file -- so
+  # an image can only be found by following CMake's link graph. Selecting
+  # purely by which target compiles the file finds nothing here.
+  library_source=$cmake_fixture/support.c
+  library_line=$(grep -n "value / 2" "$library_source" | cut -d: -f1)
+  [[ -n $library_line ]] || fail "no halve line in $library_source"
+
+  cp "$config/helix/languages.toml.firmware" "$config/helix/languages.toml"
+  : >"$DAP_STUB_LOG"
+  library_capture=$workdir/cmake-library.txt
+  export SOURCE_FILE=$library_source
+  LINGER=40 DEADLINE=70 start_session "$library_capture" ":$library_line" ":debug-here"
+
+  waited=0
+  while ! grep -q '"command": *"setBreakpoints"' "$DAP_STUB_LOG" 2>/dev/null; do
+    sleep 1
+    waited=$((waited + 1))
+    if [[ $waited -gt 50 ]]; then
+      stop_session
+      fail "no setBreakpoints for the library source in 50s" "$library_capture"
+    fi
+  done
+  stop_session
+  cp "$workdir/languages.toml.host" "$config/helix/languages.toml"
+
+  library_launch=$(grep '"command": *"launch"' "$DAP_STUB_LOG" | tail -1)
+  grep -q "build/blinky.elf" <<<"$library_launch" ||
+    fail "a library line did not reach the executable that links it: $library_launch" \
+      "$library_capture"
+  if grep -qE "libsupport|sdk_tool" <<<"$library_launch"; then
+    fail "the launch named the library or the unrelated tool: $library_launch" \
+      "$library_capture"
+  fi
+  grep -qE "\"line\": *$library_line" <<<"$(grep '"command": *"setBreakpoints"' "$DAP_STUB_LOG" | tail -1)" ||
+    fail "no breakpoint on line $library_line" "$library_capture"
+
+  echo "integration-check: a library-owned line reached blinky.elf through the link graph, breakpoint on line $library_line"
 fi
 
 echo "integration-check: rust, C and C++, host and firmware, all work in helix"

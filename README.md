@@ -299,13 +299,20 @@ A build is firmware when the project itself says it does not run here:
 | CMake | a system name unlike the host's, or a toolchain file | CMake's file API |
 | PlatformIO | an environment whose platform is not `native` | `.pio/build/<env>/firmware.elf` |
 
-For CMake the image comes from querying the file API's `codemodel-v2`, which
-reports every target's type, sources and artifacts. The cog selects the
-non-imported executable that compiles the file under the cursor. That drops
-out libraries as well as SDK-provided tools and boot stages without knowing
-their names or globbing for `*.elf`. Two executables that both compile the
-cursor source are refused rather than guessed between: flashing the wrong
-image means recovering the board by hand.
+For CMake the image comes from querying the file API's `codemodel-v2`,
+which reports every target's type, sources, artifacts and dependencies. The
+cog takes the one non-imported executable that compiles the file under the
+cursor, or that links whatever does.
+
+Both halves are load-bearing. A real SDK build has several executables: the
+Pico SDK's codemodel also names `picotool`, `pioasm` and a boot stage, so
+ownership of the source is what picks the firmware out. And a build system
+may compile your own code into a library -- ESP-IDF puts `main.c` in its
+`__idf_main` component and builds the ELF from a generated empty source --
+so nothing owns `main.c` there at all, and only the link graph reaches it.
+Neither rule names a vendor or globs for `*.elf`. Two executables that both
+reach the cursor source are refused rather than guessed between: flashing
+the wrong image means recovering the board by hand.
 
 An image with no debug flags is called out rather than launched silently,
 because a breakpoint that cannot bind looks exactly like a breakpoint the
@@ -322,9 +329,31 @@ The breakpoint cannot ride in a probe-rs launch. probe-rs has no
 `preRunCommands` and drops unknown keys silently, so the cog places the
 breakpoint in Helix first and Helix delivers it over `setBreakpoints` once
 the adapter reports itself initialised. The integration check asserts that
-ordering against a stub. It was also verified on a Pico 2: probe-rs accepted
-the line-11 breakpoint, flashed the ELF, continued from reset, and stopped
-on that exact address with `ticks = 0` visible in Helix.
+ordering against a stub, and `make hardware-check` asserts it against real
+silicon.
+
+### make hardware-check
+
+Drives `:debug-here` on an actual board, through an actual adapter, in an
+actual helix, and then reads the DAP exchange back: the image the file API
+named was flashed, the breakpoint bound at an address, the core stopped at
+that address, and target memory was readable. It skips itself without
+hardware, so it is outside `make check`.
+
+It knows nothing about any board. The project, chip, adapter and line are
+inputs, so another target needs no code here:
+
+```
+HARDWARE_CHIP=esp32s3 HARDWARE_PROJECT=~/blink \
+  HARDWARE_SOURCE=main/main.c HARDWARE_MARKER='ticks += 1' make hardware-check
+```
+
+With nothing set it builds `tests/pico-sdk-fixture`, a real Pico SDK
+project, for a Pico 2 over a Raspberry Pi Debug Probe. That fixture is a
+genuine SDK build on purpose: its codemodel is the one that broke an
+earlier version of the selection rule. It builds offline because the flake
+pins `pico-sdk` and `picotool` at the same version, which stops the SDK
+fetching and building picotool itself.
 
 Debugging one embedded *test* is refused with a reason. Selecting a test is
 a debug-console command, which is a DAP `evaluate` request, and neither

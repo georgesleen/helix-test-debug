@@ -18,8 +18,7 @@
          cmake-toolchain-file
          codemodel-reply
          codemodel-targets
-         sole-artifact
-         target-artifact)
+         firmware-artifact)
 
 (define (json-or-false text)
   (if (not (string? text))
@@ -123,36 +122,88 @@
 ;; Whether this target compiles the file under the cursor. CMake reports
 ;; project sources relative to the top-level source directory, which is the
 ;; same spelling path-within produces at the call site.
-(define (target-has-source? sources source)
-  (let loop ([remaining sources])
-    (cond [(empty? remaining) #f]
-          [(and (hash? (car remaining))
-                (equal? (hash-try-get (car remaining) 'path) source))
-           #t]
-          [else (loop (cdr remaining))])))
-
-;; The artifact of the non-imported executable that compiles the file under
-;; the cursor. SDKs commonly add their own executable tools and boot stages;
-;; asking which target owns this source distinguishes the user's firmware
-;; without knowing a vendor, filename, extension, or build-system convention.
-(define (target-artifact target source)
-  (let ([parsed (json-or-false target)])
-    (if (or (not (hash? parsed))
-            (not (equal? (hash-try-get parsed 'type) "EXECUTABLE"))
-            (equal? (hash-try-get parsed 'imported) #t))
+(define (target-has-source? parsed source)
+  (let ([sources (hash-try-get parsed 'sources)])
+    (if (not (list? sources))
         #f
-        (let ([sources (hash-try-get parsed 'sources)]
-              [artifacts (hash-try-get parsed 'artifacts)])
-          (if (or (not (list? sources))
-                  (not (target-has-source? sources source))
-                  (not (list? artifacts))
-                  (empty? artifacts))
-              #f
-              (let ([first (car artifacts)])
-                (if (hash? first) (hash-try-get first 'path) #f)))))))
+        (let loop ([remaining sources])
+          (cond [(empty? remaining) #f]
+                [(and (hash? (car remaining))
+                      (equal? (hash-try-get (car remaining) 'path) source))
+                 #t]
+                [else (loop (cdr remaining))])))))
 
-;; A project that builds two executables cannot have one chosen for it:
-;; flashing the wrong image means physically recovering the device, so the
-;; caller names them instead.
-(define (sole-artifact artifacts)
-  (if (equal? (length artifacts) 1) (car artifacts) #f))
+(define (target-dependency-ids parsed)
+  (let ([dependencies (hash-try-get parsed 'dependencies)])
+    (if (not (list? dependencies))
+        '()
+        (filter string?
+                (map (lambda (dependency)
+                       (if (hash? dependency) (hash-try-get dependency 'id) #f))
+                     dependencies)))))
+
+(define (executable-target? parsed)
+  (and (equal? (hash-try-get parsed 'type) "EXECUTABLE")
+       (not (equal? (hash-try-get parsed 'imported) #t))))
+
+(define (first-artifact parsed)
+  (let ([artifacts (hash-try-get parsed 'artifacts)])
+    (if (or (not (list? artifacts)) (empty? artifacts))
+        #f
+        (let ([first (car artifacts)])
+          (if (hash? first) (hash-try-get first 'path) #f)))))
+
+(define (index-by-id parsed-targets)
+  (let loop ([remaining parsed-targets] [index (hash)])
+    (if (empty? remaining)
+        index
+        (let ([id (hash-try-get (car remaining) 'id)])
+          (loop (cdr remaining)
+                (if (string? id) (hash-insert index id (car remaining)) index))))))
+
+;; Whether this target compiles the source, or links something that does.
+;; The walk is over CMake's own dependency graph, so it needs no notion of
+;; components, libraries or frameworks. visited keeps a diamond in the
+;; graph from being walked twice and a cycle from not terminating.
+(define (links-source? parsed index source)
+  (let loop ([pending (list parsed)] [visited '()])
+    (cond
+      [(empty? pending) #f]
+      [else
+       (let* ([target (car pending)]
+              [id (hash-try-get target 'id)])
+         (cond
+           [(and (string? id) (member? id visited)) (loop (cdr pending) visited)]
+           [(target-has-source? target source) #t]
+           [else
+            (let ([dependencies (filter hash?
+                                        (map (lambda (dependency)
+                                               (hash-try-get index dependency))
+                                             (target-dependency-ids target)))])
+              (loop (append (cdr pending) dependencies)
+                    (if (string? id) (cons id visited) visited)))]))])))
+
+;; The image to flash for the file under the cursor: the one non-imported
+;; executable that compiles it, or that links whatever does.
+;;
+;; Ownership alone is not enough. An SDK's own executable tools and boot
+;; stages have to be excluded, which ownership does. But a build system may
+;; also put the user's own code in a library: ESP-IDF compiles main.c into
+;; the __idf_main component and links it into an executable built from a
+;; generated empty source, so nothing "owns" main.c there at all. Walking
+;; the link graph covers both without naming either.
+;;
+;; #f for none, and #f for several: if two executables both reach the
+;; source, flashing the wrong one means physically recovering the device,
+;; so the caller says so instead of guessing.
+(define (firmware-artifact targets source)
+  (let* ([parsed (filter hash? (map json-or-false targets))]
+         [index (index-by-id parsed)]
+         [artifacts (filter string?
+                            (map (lambda (target)
+                                   (if (and (executable-target? target)
+                                            (links-source? target index source))
+                                       (first-artifact target)
+                                       #f))
+                                 parsed))])
+    (if (equal? (length artifacts) 1) (car artifacts) #f)))

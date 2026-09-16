@@ -92,28 +92,34 @@ across every configuration.
 - Order is the order CMake wrote them, which is deterministic per
   configure.
 
-## `(target-artifact target source)`
+## `(firmware-artifact targets source)`
 
-The path of the non-imported executable target that compiles `source`,
-relative to the build directory, or `#f`.
+The image to flash for the file under the cursor, as a path relative to the
+build directory, or `#f`. `targets` is the text of every target reply the
+codemodel named.
 
-- The first `artifacts[].path` when the target's `type` is `EXECUTABLE`,
-  `imported` is not true, and one of its `sources[].path` values equals
-  `source`.
-- `#f` for an executable that does not own the cursor source. This is what
-  removes SDK-provided executable tools and boot stages without knowing
-  their names. A real Pico SDK build exposed why type alone is insufficient:
-  its codemodel included the firmware, `picotool`, `pioasm`, the boot stage,
-  and imported Python interpreter targets.
-- `#f` for every non-executable, an imported executable, JSON that is not an
-  object, or a target with no sources or artifacts.
+It is the one non-imported `EXECUTABLE` that either compiles `source` or
+reaches a target that does, through `dependencies` in CMake's own graph.
 
-## `(sole-artifact artifacts)`
+Two things make both halves of that necessary:
 
-The one remaining image to flash, or `#f`.
+- A real SDK build has several executables. The Pico SDK's codemodel also
+  names `picotool`, `pioasm` and a boot stage, so "the only executable" is
+  not an answer. Ownership of the source is.
+- A build system may compile the user's own code into a library. ESP-IDF
+  puts `main.c` in its `__idf_main` component and builds the executable
+  from a *generated empty* source (`project.cmake`: `add_executable(
+  ${project_elf} "${project_elf_src}")`), so no executable owns `main.c`
+  at all. Following the link graph finds it; ownership alone finds nothing.
 
-- The single element when there is exactly one.
-- `#f` for none, and `#f` for several: if two executable targets both compile
-  the cursor source they cannot be distinguished safely. Guessing would
-  flash the wrong image, which on a device means physically reflashing to
-  recover.
+Neither rule names a vendor, a component system, a filename or an
+extension: `dependencies` is the same field for every generator and
+toolchain.
+
+- `#f` for none, and `#f` for several: if two executables both reach the
+  source they cannot be distinguished safely, and flashing the wrong image
+  means physically recovering the device.
+- `#f` for a target with no artifacts, and for replies that are not JSON:
+  a half-written reply must not raise.
+- A diamond in the graph is walked once and a cycle terminates, since an
+  editor command must not hang on either.

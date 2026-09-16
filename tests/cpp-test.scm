@@ -797,54 +797,144 @@
               (codemodel-targets "{\"configurations\":[]}"))
 (check-equal! "junk names nothing" '() (codemodel-targets "}{"))
 
-(check-equal! "the executable that owns the cursor source is the image"
-              "blinky.elf"
-              (target-artifact
-               (string-append "{\"name\":\"blinky\",\"type\":\"EXECUTABLE\","
-                              "\"sources\":[{\"path\":\"src/blinky.c\"}],"
-                              "\"artifacts\":[{\"path\":\"blinky.elf\"}]}")
-               "src/blinky.c"))
-;; SDK tools and boot stages are executables too. Source ownership excludes
-;; them without teaching the cog any vendor's target names or layout.
-(check-false! "an executable for another source is not the image"
-              (target-artifact
-               (string-append "{\"name\":\"boot-stage\",\"type\":\"EXECUTABLE\","
-                              "\"sources\":[{\"path\":\"sdk/boot.c\"}],"
-                              "\"artifacts\":[{\"path\":\"boot.elf\"}]}")
-               "src/blinky.c"))
-(check-false! "an imported executable is not firmware"
-              (target-artifact
-               (string-append "{\"name\":\"tool\",\"type\":\"EXECUTABLE\",\"imported\":true,"
-                              "\"sources\":[{\"path\":\"src/blinky.c\"}],"
-                              "\"artifacts\":[{\"path\":\"tool\"}]}")
-               "src/blinky.c"))
-;; A library drops out here, so nothing downstream has to know target types.
-(check-false! "a static library is not an image"
-              (target-artifact
-               (string-append "{\"name\":\"support\",\"type\":\"STATIC_LIBRARY\","
-                              "\"sources\":[{\"path\":\"src/blinky.c\"}],"
-                              "\"artifacts\":[{\"path\":\"libsupport.a\"}]}")
-               "src/blinky.c"))
-(check-false! "an object library is not an image either"
-              (target-artifact
-               "{\"type\":\"OBJECT_LIBRARY\",\"sources\":[{\"path\":\"a.c\"}],\"artifacts\":[{\"path\":\"o.o\"}]}"
-               "a.c"))
-(check-false! "an executable with no artifacts names none"
-              (target-artifact
-               "{\"type\":\"EXECUTABLE\",\"sources\":[{\"path\":\"a.c\"}],\"artifacts\":[]}"
-               "a.c"))
-(check-false! "an executable with no sources names none"
-              (target-artifact
-               "{\"type\":\"EXECUTABLE\",\"sources\":[],\"artifacts\":[{\"path\":\"a.elf\"}]}"
-               "a.c"))
-(check-false! "junk names none" (target-artifact "not json" "a.c"))
+;; firmware-artifact: which of a project's executables to flash for the
+;; file under the cursor
+(define (cmake-target name type . fields)
+  (string-append "{\"id\":\"" name "\",\"name\":\"" name "\",\"type\":\"" type "\""
+                 (apply string-append fields)
+                 "}"))
 
-;; sole-artifact: flashing the wrong image means recovering the device by
-;; hand, so several are refused rather than guessed between
-(check-equal! "one executable is the image" "blinky.elf" (sole-artifact '("blinky.elf")))
-(check-false! "two executables cannot be chosen between"
-              (sole-artifact '("blinky.elf" "bootloader.elf")))
-(check-false! "none is not an image" (sole-artifact '()))
+(define (cmake-sources . paths)
+  (string-append ",\"sources\":["
+                 (let loop ([remaining paths] [text ""])
+                   (if (empty? remaining)
+                       text
+                       (loop (cdr remaining)
+                             (string-append text
+                                            (if (equal? text "") "" ",")
+                                            "{\"path\":\"" (car remaining) "\"}"))))
+                 "]"))
+
+(define (cmake-artifact path)
+  (string-append ",\"artifacts\":[{\"path\":\"" path "\"}]"))
+
+(define (cmake-links . ids)
+  (string-append ",\"dependencies\":["
+                 (let loop ([remaining ids] [text ""])
+                   (if (empty? remaining)
+                       text
+                       (loop (cdr remaining)
+                             (string-append text
+                                            (if (equal? text "") "" ",")
+                                            "{\"id\":\"" (car remaining) "\"}"))))
+                 "]"))
+
+(check-equal! "the executable that compiles the source is the image"
+              "blinky.elf"
+              (firmware-artifact
+               (list (cmake-target "blinky" "EXECUTABLE"
+                                   (cmake-sources "src/blinky.c")
+                                   (cmake-artifact "blinky.elf")))
+               "src/blinky.c"))
+
+;; A real SDK build is mostly targets that have nothing to do with the
+;; file being debugged: the Pico SDK's codemodel also names picotool,
+;; pioasm and a boot stage, all executables.
+(check-equal! "an SDK's own executables are not the image"
+              "blinky.elf"
+              (firmware-artifact
+               (list (cmake-target "picotool" "EXECUTABLE"
+                                   (cmake-sources "tools/picotool.cpp")
+                                   (cmake-artifact "picotool"))
+                     (cmake-target "bs2" "EXECUTABLE"
+                                   (cmake-sources "sdk/boot2.S")
+                                   (cmake-artifact "bs2.elf"))
+                     (cmake-target "blinky" "EXECUTABLE"
+                                   (cmake-sources "src/blinky.c")
+                                   (cmake-artifact "blinky.elf")))
+               "src/blinky.c"))
+(check-false! "an imported executable is never the image"
+              (firmware-artifact
+               (list (cmake-target "tool" "EXECUTABLE" ",\"imported\":true"
+                                   (cmake-sources "src/blinky.c")
+                                   (cmake-artifact "tool")))
+               "src/blinky.c"))
+(check-false! "a library alone is not an image"
+              (firmware-artifact
+               (list (cmake-target "support" "STATIC_LIBRARY"
+                                   (cmake-sources "src/blinky.c")
+                                   (cmake-artifact "libsupport.a")))
+               "src/blinky.c"))
+
+;; ESP-IDF compiles main.c into its __idf_main component and links that
+;; into an executable built from a generated empty source, so no
+;; executable compiles the file at all. The link graph still reaches it.
+(check-equal! "an executable that links the library holding the source"
+              "app.elf"
+              (firmware-artifact
+               (list (cmake-target "app" "EXECUTABLE"
+                                   (cmake-sources "build/project_elf_src.c")
+                                   (cmake-links "__idf_main")
+                                   (cmake-artifact "app.elf"))
+                     (cmake-target "__idf_main" "STATIC_LIBRARY"
+                                   (cmake-sources "main/main.c")
+                                   (cmake-artifact "libmain.a")))
+               "main/main.c"))
+(check-equal! "the link is followed through intermediate libraries"
+              "app.elf"
+              (firmware-artifact
+               (list (cmake-target "app" "EXECUTABLE"
+                                   (cmake-links "middle")
+                                   (cmake-artifact "app.elf"))
+                     (cmake-target "middle" "STATIC_LIBRARY" (cmake-links "leaf"))
+                     (cmake-target "leaf" "STATIC_LIBRARY" (cmake-sources "main/main.c")))
+               "main/main.c"))
+;; A dependency graph may be a diamond, and a badly written one may have a
+;; cycle. Neither may hang the editor.
+(check-equal! "a diamond is walked once"
+              "app.elf"
+              (firmware-artifact
+               (list (cmake-target "app" "EXECUTABLE"
+                                   (cmake-links "left" "right")
+                                   (cmake-artifact "app.elf"))
+                     (cmake-target "left" "STATIC_LIBRARY" (cmake-links "shared"))
+                     (cmake-target "right" "STATIC_LIBRARY" (cmake-links "shared"))
+                     (cmake-target "shared" "STATIC_LIBRARY" (cmake-sources "main/main.c")))
+               "main/main.c"))
+(check-false! "a cycle terminates instead of hanging"
+              (firmware-artifact
+               (list (cmake-target "app" "EXECUTABLE"
+                                   (cmake-links "a")
+                                   (cmake-artifact "app.elf"))
+                     (cmake-target "a" "STATIC_LIBRARY" (cmake-links "b"))
+                     (cmake-target "b" "STATIC_LIBRARY" (cmake-links "a")))
+               "elsewhere/main.c"))
+
+;; Flashing the wrong image means recovering the device by hand, so an
+;; ambiguous answer is refused rather than guessed at.
+(check-false! "two executables reaching the source cannot be chosen between"
+              (firmware-artifact
+               (list (cmake-target "app" "EXECUTABLE"
+                                   (cmake-links "core")
+                                   (cmake-artifact "app.elf"))
+                     (cmake-target "recovery" "EXECUTABLE"
+                                   (cmake-links "core")
+                                   (cmake-artifact "recovery.elf"))
+                     (cmake-target "core" "STATIC_LIBRARY" (cmake-sources "src/main.c")))
+               "src/main.c"))
+(check-false! "no executable reaching the source is no image"
+              (firmware-artifact
+               (list (cmake-target "app" "EXECUTABLE"
+                                   (cmake-sources "src/other.c")
+                                   (cmake-artifact "app.elf")))
+               "src/main.c"))
+(check-false! "an executable with no artifacts names none"
+              (firmware-artifact
+               (list (cmake-target "app" "EXECUTABLE" (cmake-sources "src/main.c")))
+               "src/main.c"))
+(check-false! "no targets at all is no image" (firmware-artifact '() "src/main.c"))
+;; A half-written reply must not raise.
+(check-false! "junk names none" (firmware-artifact (list "not json" "}{") "src/main.c"))
 
 ;; pio-environment-platform and pio-firmware-environment: everything that is
 ;; not the host is firmware, needing no list of platforms

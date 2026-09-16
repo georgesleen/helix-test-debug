@@ -1,4 +1,4 @@
-.PHONY: test compile-check helix-check integration-check fmt check clean
+.PHONY: test compile-check helix-check integration-check hardware-check fmt check clean
 
 CHECK_DIR = .compile-check
 
@@ -31,6 +31,12 @@ helix-check:
 # helix, cargo or the adapter is missing.
 integration-check:
 	bash tests/integration.sh
+
+# Drive :debug-here against a real MCU over a real DAP adapter. Deliberately
+# outside `check`: it needs a probe and a board attached. Any target works,
+# see the variables at the top of the script.
+hardware-check:
+	bash tests/hardware-check.sh
 
 fmt:
 	nixfmt flake.nix

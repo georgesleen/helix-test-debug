@@ -11,10 +11,17 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   the folder and reports PlatformIO's summary.
 - Embedded C and C++: a cross-compiled CMake project debugs the line under
   the cursor on the target. The image is the non-imported executable that
-  CMake's own file API says compiles that source, so Zephyr, ESP-IDF, the
-  Pico SDK and CubeMX output work without the cog knowing any of them, and
-  the SDK's own tools and boot stages are not mistaken for firmware.
-  PlatformIO firmware environments too.
+  CMake's file API says compiles that source, or links whatever does, so
+  Zephyr, ESP-IDF, the Pico SDK and CubeMX output work without the cog
+  knowing any of them: an SDK's own tools and boot stages are not mistaken
+  for firmware, and a project whose sources live in a library -- which is
+  how ESP-IDF builds every project -- still finds its image. PlatformIO
+  firmware environments too.
+- `make hardware-check` drives `:debug-here` against a real board through a
+  real adapter and asserts the DAP exchange: the image was flashed, the
+  breakpoint bound, the core stopped there, target memory was readable. The
+  project, chip and adapter are inputs, so it is not specific to a board.
+  It skips itself without hardware and stays outside `make check`.
 - Nothing is tied to one chip, vendor, toolchain or probe: a cargo crate is
   firmware because it declares a runner, whatever that runner is, and which
   adapter to drive is the launch template's business.

@@ -62,8 +62,7 @@
                   cmake-toolchain-file
                   codemodel-reply
                   codemodel-targets
-                  sole-artifact
-                  target-artifact
+                  firmware-artifact
                   pio-chip
                   pio-environment-platform
                   pio-firmware-build
@@ -394,9 +393,10 @@
                      found))]
           [else (loop (cdr entries) found)])))
 
-;; The one executable that compiles the file under the cursor, or #f when
-;; there is not exactly one. SDK-provided tools and boot stages drop out in
-;; the pure half because they do not own that source.
+;; The image for the file under the cursor, from the file API's reply.
+;; Which of a project's executables that is, and whether the source is
+;; compiled into it directly or through a library, is decided in the pure
+;; half.
 (define (cmake-firmware-artifact build source)
   (let ([index (newest-index build)])
     (if (not index)
@@ -404,17 +404,12 @@
         (let ([reply (codemodel-reply (or (file-contents index) ""))])
           (if (not reply)
               #f
-              (let* ([targets (codemodel-targets
-                               (or (file-contents (join-path (reply-directory build) reply)) ""))]
-                     [artifacts (filter string?
-                                        (map (lambda (target)
-                                               (target-artifact
-                                                (or (file-contents
-                                                     (join-path (reply-directory build) target))
-                                                    "")
-                                                source))
-                                             targets))])
-                (sole-artifact artifacts)))))))
+              (firmware-artifact
+               (map (lambda (target)
+                      (or (file-contents (join-path (reply-directory build) target)) ""))
+                    (codemodel-targets
+                     (or (file-contents (join-path (reply-directory build) reply)) "")))
+               source))))))
 
 ;; A project may carry both manifests. PlatformIO wins when the file is
 ;; inside its test tree, because that is the only thing that could have

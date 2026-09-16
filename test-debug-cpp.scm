@@ -22,8 +22,7 @@
          cmake-toolchain-file
          codemodel-reply
          codemodel-targets
-         sole-artifact
-         target-artifact
+         firmware-artifact
          pio-build-arguments
          pio-debug-build
          pio-chip

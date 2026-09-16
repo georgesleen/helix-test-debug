@@ -145,10 +145,20 @@
               # for the Unity path. Its core directory needs the network
               # once, to install the native platform.
               platformio
-              # The DAP adapter for an embedded target. See docs/embedded.md;
-              # nothing here drives it yet.
+              # The DAP adapter for an embedded target, and the one the
+              # hardware check drives by default.
               probe-rs-tools
+              # tests/pico-sdk-fixture builds against these. picotool is
+              # here so the SDK finds an install of exactly its version
+              # rather than fetching and building one, which is the only
+              # step in that build that would need the network.
+              pico-sdk
+              picotool
             ];
+
+            # The SDK is found through this variable, not through CMAKE
+            # search paths, so tests/pico-sdk-fixture needs it set.
+            PICO_SDK_PATH = "${pkgs.pico-sdk}/lib/pico-sdk";
           };
         }
       );
