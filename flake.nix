@@ -37,6 +37,35 @@
         };
       };
 
+      # For an embedded target flashed by probe-rs, which takes no
+      # breakpoint in its launch request: the cog places one in helix and
+      # helix delivers it over setBreakpoints. Needs its own debugger block,
+      # not just this template, since probe-rs is not lldb.
+      lib.probeRsFirmwareTemplate = {
+        name = "firmware";
+        request = "launch";
+        completion = [
+          {
+            name = "elf";
+            completion = "filename";
+          }
+          { name = "chip"; }
+        ];
+        args = {
+          chip = "{1}";
+          flashingConfig = {
+            flashingEnabled = true;
+            haltAfterReset = true;
+          };
+          coreConfigs = [
+            {
+              coreIndex = 0;
+              programBinary = "{0}";
+            }
+          ];
+        };
+      };
+
       # For the crate's own binary, stopped at the cursor: a line that is not
       # in a test. A template's arguments are positional, so one with no
       # filter has to be its own template.

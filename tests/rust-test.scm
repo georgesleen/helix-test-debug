@@ -1028,4 +1028,34 @@
               "target/release"
               (artifact-directory #f "release"))
 
+
+;; remote-launch? and cross-target?: what makes a launch remote is that the
+;; project said it cannot run the artifact itself, not any tool's name
+(check-true! "a probe-rs runner means the binary is not run locally"
+             (remote-launch? "probe-rs run --chip RP2350"))
+;; Any runner at all qualifies. The cog drives no tool itself: which adapter
+;; to use is the launch template's business.
+(check-true! "cargo-embed counts" (remote-launch? "cargo-embed --chip STM32F103C8"))
+(check-true! "probe-run counts" (remote-launch? "probe-run --chip nRF52840_xxAA"))
+(check-true! "espflash counts" (remote-launch? "espflash flash --monitor"))
+(check-true! "pyocd counts" (remote-launch? "pyocd gdbserver"))
+(check-true! "an openocd wrapper script counts" (remote-launch? "./tools/flash.sh"))
+(check-true! "qemu counts" (remote-launch? "qemu-system-arm -machine mps2-an385 -kernel"))
+(check-false! "no runner means a local binary" (remote-launch? #f))
+(check-false! "an empty runner is no runner" (remote-launch? ""))
+(check-false! "whitespace is no runner either" (remote-launch? "   "))
+
+(check-true! "a triple that is not the host is a cross build"
+             (cross-target? "thumbv6m-none-eabi" "x86_64-unknown-linux-gnu"))
+;; No list of embedded triples exists anywhere: anything unlike the host
+;; qualifies, including targets that do not exist yet.
+(check-true! "a risc-v target is cross too"
+             (cross-target? "riscv32imc-unknown-none-elf" "x86_64-unknown-linux-gnu"))
+(check-true! "an xtensa target is cross too"
+             (cross-target? "xtensa-esp32s3-none-elf" "x86_64-unknown-linux-gnu"))
+(check-false! "naming your own triple is not cross-compiling"
+              (cross-target? "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-gnu"))
+(check-false! "no declared target is the host"
+              (cross-target? #f "x86_64-unknown-linux-gnu"))
+
 (finish!)

@@ -13,11 +13,25 @@
 (require "test-debug/cpp/ctest.scm")
 (require "test-debug/cpp/unity.scm")
 (require "test-debug/cpp/pio.scm")
+(require "test-debug/cpp/cmake.scm")
 
 (provide base-name
+         build-type-debuggable?
+         cmake-build-type
+         cmake-cross-system?
+         cmake-toolchain-file
+         codemodel-reply
+         codemodel-targets
+         sole-artifact
+         target-artifact
          pio-build-arguments
          pio-debug-build
+         pio-chip
          pio-environment
+         pio-environment-platform
+         pio-firmware-build
+         pio-firmware-environment
+         pio-firmware-path
          pio-environments
          pio-outcome
          pio-program-path

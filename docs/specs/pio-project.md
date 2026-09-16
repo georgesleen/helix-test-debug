@@ -104,3 +104,65 @@ What `pio test` reported, or `#f`.
   like.
 - The `=` rules PlatformIO draws around the summary are stripped, so the
   line can go straight on the statusline.
+
+## Firmware, as opposed to a host test
+
+PlatformIO builds firmware for any board its platforms support, and the
+cog needs three things from a project to debug it: which environment is not
+the host, where that environment leaves its ELF, and how to build it with
+debug information.
+
+## `(pio-environment-platform text environment)`
+
+The `platform` an environment declares, or `#f`.
+
+- The value assigned inside that environment's own section, so an
+  assignment in `[env]` or in another environment is not it.
+- `#f` for an environment that declares none, and for one that does not
+  exist.
+- Returned verbatim: `native`, `raspberrypi`, `espressif32`, a git URL, or
+  anything a platform can be named by.
+
+## `(pio-firmware-environment text)`
+
+The environment to flash, or `#f`.
+
+- The first environment whose platform is not `native`. Everything that is
+  not the host is firmware, which is the same rule the rust half uses and
+  needs no list of platforms.
+- `#f` when every environment is `native`, and when there are none: a
+  host-only project has no firmware to debug.
+
+## `(pio-firmware-path environment)`
+
+`.pio/build/<environment>/firmware.elf`, which is where every PlatformIO
+platform leaves the linked image.
+
+## `(pio-firmware-build environment)`
+
+The build, as an argument list for `sh`, carrying debug information:
+`("run" "-e" environment)` under `PLATFORMIO_BUILD_FLAGS="-Og -g2"`.
+
+- `-Og -g2` is what PlatformIO's own `debug_build_flags` default to, so this
+  is the same build `build_type = debug` would have produced. The build type
+  cannot be set per invocation: `pio run` has no `--project-option`, and
+  `PLATFORMIO_BUILD_TYPE` is ignored, so the flags are appended and win by
+  being last.
+- `-O0` is deliberately not used, unlike the host test build. Turning
+  optimisation off can push an image past the flash it has to fit in and
+  changes the timing of anything bit-banged. `-Og` is the setting meant for
+  exactly this.
+- Values reach the shell through `"$@"`, never the script text.
+
+## `(pio-chip text environment)`
+
+The chip to name in the launch, or `""`.
+
+- The value of `custom_chip` in that environment, PlatformIO's own
+  convention for options it does not define itself.
+- `""` when unset, because a launch template that does not reference the
+  chip is perfectly normal: an openocd or J-Link template names its target
+  in a config file instead.
+- The cog does not translate `board` into a chip name. A PlatformIO board
+  and a probe-rs chip are different namespaces, and guessing between them
+  would flash the wrong thing.

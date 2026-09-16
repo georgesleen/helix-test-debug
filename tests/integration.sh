@@ -554,9 +554,14 @@ firmware_source=$firmware_fixture/src/main.rs
 firmware_line=$(grep -n "ticks += 1" "$firmware_source" | cut -d: -f1)
 [[ -n $firmware_line ]] || fail "no ticks line in $firmware_source"
 
-cat >"$config/helix/languages.toml.firmware" <<EOF
+# Both languages point at the stub here: an embedded rust crate is a .rs
+# buffer and a cross CMake project is a .c one, and helix picks the adapter
+# per language.
+firmware_languages() {
+  local language=$1
+  cat <<EOF
 [[language]]
-name = "rust"
+name = "$language"
 
 [language.debugger]
 name = "stub"
@@ -575,6 +580,13 @@ chip = "{1}"
 flashingConfig = { flashingEnabled = true, haltAfterReset = true }
 coreConfigs = [ { coreIndex = 0, programBinary = "{0}" } ]
 EOF
+}
+
+{
+  firmware_languages rust
+  echo
+  firmware_languages c
+} >"$config/helix/languages.toml.firmware"
 cp "$config/helix/languages.toml" "$workdir/languages.toml.host"
 cp "$config/helix/languages.toml.firmware" "$config/helix/languages.toml"
 
@@ -614,4 +626,55 @@ grep -qE "\"line\": *$firmware_line" <<<"$breakpoints" ||
 
 echo "integration-check: the embedded launch named RP235x and helix sent a breakpoint on line $firmware_line"
 
-echo "integration-check: tests, the picker, breakpoints, the binary path, PlatformIO and the embedded launch work in helix"
+# :debug-here in a cross-compiled CMake project, which is how most firmware
+# is actually built: Zephyr, ESP-IDF, the Pico SDK and CubeMX output are all
+# CMake underneath. The image is found through CMake's own file API rather
+# than by globbing, so the fixture also builds a static library that must
+# not be picked. Skipped without a cross compiler.
+if ! command -v arm-none-eabi-gcc >/dev/null; then
+  echo "integration-check: no arm-none-eabi-gcc, skipping the CMake firmware phase"
+else
+  cmake_fixture=$root/tests/cmake-firmware-fixture
+  cmake_source=$cmake_fixture/blinky.c
+  cmake_line=$(grep -n "ticks += halve" "$cmake_source" | cut -d: -f1)
+  [[ -n $cmake_line ]] || fail "no ticks line in $cmake_source"
+
+  rm -rf "$cmake_fixture/build"
+  (cd "$cmake_fixture" && cmake -S . -B build \
+    -DCMAKE_TOOLCHAIN_FILE=toolchain-arm.cmake -DCMAKE_BUILD_TYPE=Debug) \
+    >"$workdir/cmake-configure.txt" 2>&1 ||
+    fail "the CMake firmware fixture does not configure" "$workdir/cmake-configure.txt"
+
+  cp "$config/helix/languages.toml.firmware" "$config/helix/languages.toml"
+  : >"$DAP_STUB_LOG"
+  cmake_capture=$workdir/cmake-firmware.txt
+  export SOURCE_FILE=$cmake_source
+  fixture=$cmake_fixture
+  LINGER=40 DEADLINE=70 start_session "$cmake_capture" ":$cmake_line" ":debug-here"
+
+  waited=0
+  while ! grep -q '"command": *"setBreakpoints"' "$DAP_STUB_LOG" 2>/dev/null; do
+    sleep 1
+    waited=$((waited + 1))
+    if [[ $waited -gt 50 ]]; then
+      stop_session
+      fail "no setBreakpoints for the CMake firmware in 50s" "$cmake_capture"
+    fi
+  done
+  stop_session
+  cp "$workdir/languages.toml.host" "$config/helix/languages.toml"
+
+  cmake_launch=$(grep '"command": *"launch"' "$DAP_STUB_LOG" | tail -1)
+  grep -q "build/blinky.elf" <<<"$cmake_launch" ||
+    fail "the launch does not name the executable the file API reported: $cmake_launch" \
+      "$cmake_capture"
+  if grep -q "libsupport" <<<"$cmake_launch"; then
+    fail "the launch named the static library: $cmake_launch" "$cmake_capture"
+  fi
+  grep -qE "\"line\": *$cmake_line" <<<"$(grep '"command": *"setBreakpoints"' "$DAP_STUB_LOG" | tail -1)" ||
+    fail "no breakpoint on line $cmake_line" "$cmake_capture"
+
+  echo "integration-check: CMake's file API named blinky.elf and helix sent a breakpoint on line $cmake_line"
+fi
+
+echo "integration-check: rust, C and C++, host and firmware, all work in helix"

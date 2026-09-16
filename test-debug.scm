@@ -56,6 +56,19 @@
                   pio-program-path
                   pio-root
                   pio-run-arguments
+                  build-type-debuggable?
+                  cmake-build-type
+                  cmake-cross-system?
+                  cmake-toolchain-file
+                  codemodel-reply
+                  codemodel-targets
+                  sole-artifact
+                  target-artifact
+                  pio-chip
+                  pio-environment-platform
+                  pio-firmware-build
+                  pio-firmware-environment
+                  pio-firmware-path
                   pio-test-folder))
 
 (provide debug-here
@@ -170,17 +183,50 @@
 ;; that is not in a test is not a failure: the breakpoint machinery does not
 ;; care, so the crate's binary is built instead and stopped at the cursor
 ;; itself rather than at the first line of a body.
+;; The triple this machine builds for, or #f when rustc cannot say. Asked
+;; once: it cannot change while the editor is running.
+(define *host-triple* #f)
+
+(define (host-triple)
+  (when (not *host-triple*)
+    (let ([output (captured-output "rustc" '("-vV") ".")])
+      (set! *host-triple*
+            (if (string? output)
+                (let loop ([lines (source-lines output)])
+                  (cond [(empty? lines) #f]
+                        [(starts-with? (trim (car lines)) "host:")
+                         (trim (text-after (car lines) "host:"))]
+                        [else (loop (cdr lines))]))
+                #f))))
+  *host-triple*)
+
 ;; The runner a crate declares, or #f. Read on each resolution rather than
 ;; cached: a project gains one the moment it is pointed at hardware.
 (define (crate-runner root)
   (cargo-runner (or (file-contents (join-path root ".cargo/config.toml")) "")))
+
+;; A crate whose config declares a runner is not launched locally: cargo
+;; will not execute the artifact directly, so neither does the cog. The
+;; runner's identity is not consulted, and no target list exists here;
+;; which adapter to drive is what the launch template says.
+(define (crate-firmware? root)
+  (let ([config (or (file-contents (join-path root ".cargo/config.toml")) "")])
+    (remote-launch? (cargo-runner config))))
+
+;; What the status line calls the target: the chip when the runner names
+;; one, otherwise the triple, which every cross build has.
+(define (firmware-label root)
+  (let ([config (or (file-contents (join-path root ".cargo/config.toml")) "")])
+    (or (runner-chip (cargo-runner config))
+        (cargo-build-target config)
+        "the target")))
 
 (define (rust-request path lines line)
   (let ([test (test-at-line lines line)]
         [root (crate-root path path-exists?)])
     (cond
       [(not root) (string-append "no Cargo.toml above " (base-name path))]
-      [(and test (probe-rs-runner? (crate-runner root)))
+      [(and test (crate-firmware? root))
        (string-append "debugging one test on "
                       (or (runner-chip (crate-runner root)) "the target")
                       " needs a debug console, which helix has no command for; run-here runs it")]
@@ -197,21 +243,15 @@
       ;; the target, and one of its tests cannot even be selected, because
       ;; naming a test is a debug-console command and helix has no way to
       ;; send one. Saying so beats flashing the wrong thing.
-      [(and (probe-rs-runner? (crate-runner root))
-            (not (runner-chip (crate-runner root))))
-       (string-append "the runner in "
-                      root
-                      "/.cargo/config.toml names no --chip, "
-                      "so the launch cannot say which target to flash")]
-      [(probe-rs-runner? (crate-runner root))
+      [(crate-firmware? root)
        (let ([relative-path (path-within root path)])
          (hash 'language 'rust
                'kind 'firmware
                'root root
                'relative-path relative-path
                'file (base-name path)
-               'filter (runner-chip (crate-runner root))
-               'chip (runner-chip (crate-runner root))
+               'filter (firmware-label root)
+               'chip (or (runner-chip (crate-runner root)) "")
                'line (+ line 1)))]
       [else
        (let ([relative-path (path-within root path)])
@@ -301,14 +341,131 @@
              'folder folder
              'executable (join-path root (pio-program-path environment)))])))
 
+;; CMake writes its system facts under a version directory, so the file has
+;; to be looked for rather than named.
+(define (cmake-system-file build)
+  (let ([directory (join-path build "CMakeFiles")])
+    (let loop ([entries (safe-read-dir directory)])
+      (cond [(empty? entries) #f]
+            [else
+             (let ([candidate (join-path (car entries) "CMakeSystem.cmake")])
+               (if (and (is-dir? (car entries)) (path-exists? candidate))
+                   candidate
+                   (loop (cdr entries))))]))))
+
+;; Either signal is enough: a build may name a system with no toolchain
+;; file, or use a toolchain file whose system matches the host.
+(define (cmake-cross? build)
+  (let ([system (cmake-system-file build)])
+    (or (and system (cmake-cross-system? (or (file-contents system) "")))
+        (if (cmake-toolchain-file (or (file-contents (join-path build "CMakeCache.txt")) ""))
+            #t
+            #f))))
+
+;; The file API answers "which image do I flash" for any project and any
+;; toolchain, but only if the query exists before cmake configures, so it
+;; is written before the build rather than read after it.
+(define (write-codemodel-query! build)
+  (call-with-exception-handler
+   (lambda (failure) #f)
+   (lambda ()
+     (let loop ([directory build]
+                [segments '(".cmake" "api" "v1" "query")])
+       (if (empty? segments)
+           (call-with-output-file (join-path directory "codemodel-v2")
+                                  (lambda (port) (display "" port)))
+           (let ([next (join-path directory (car segments))])
+             (when (not (path-exists? next))
+               (create-directory! next))
+             (loop next (cdr segments))))))))
+
+(define (reply-directory build)
+  (join-path (join-path (join-path (join-path build ".cmake") "api") "v1") "reply"))
+
+;; The newest index file, since a reply directory accumulates one per
+;; configure and only the last describes the build as it now stands.
+(define (newest-index build)
+  (let loop ([entries (safe-read-dir (reply-directory build))] [found #f])
+    (cond [(empty? entries) found]
+          [(starts-with? (base-name (car entries)) "index-")
+           (loop (cdr entries)
+                 (if (or (not found) (string>? (base-name (car entries)) (base-name found)))
+                     (car entries)
+                     found))]
+          [else (loop (cdr entries) found)])))
+
+;; The one executable a CMake project builds, or #f when there is not
+;; exactly one. Libraries drop out in the pure half.
+(define (cmake-firmware-artifact build)
+  (let ([index (newest-index build)])
+    (if (not index)
+        #f
+        (let ([reply (codemodel-reply (or (file-contents index) ""))])
+          (if (not reply)
+              #f
+              (let* ([targets (codemodel-targets
+                               (or (file-contents (join-path (reply-directory build) reply)) ""))]
+                     [artifacts (filter string?
+                                        (map (lambda (target)
+                                               (target-artifact
+                                                (or (file-contents
+                                                     (join-path (reply-directory build) target))
+                                                    "")))
+                                             targets))])
+                (sole-artifact artifacts)))))))
+
 ;; A project may carry both manifests. PlatformIO wins when the file is
 ;; inside its test tree, because that is the only thing that could have
 ;; built it.
 (define (cpp-request path lines line)
-  (let ([pio (pio-root path path-exists?)])
-    (if (and pio (pio-test-folder (path-within pio path)))
-        (unity-request path lines line pio)
-        (ctest-request path lines line))))
+  (let* ([pio (pio-root path path-exists?)]
+         [root (project-root path path-exists?)]
+         [build (if root (build-directory root path-exists?) #f)])
+    (cond
+      [(and pio (pio-test-folder (path-within pio path)))
+       (unity-request path lines line pio)]
+      [pio (pio-firmware-request path lines line pio)]
+      [(and build (cmake-cross? build)) (cmake-firmware-request path lines line root build)]
+      [else (ctest-request path lines line)])))
+
+;; Firmware in a PlatformIO project: everything outside test/ builds for the
+;; board rather than the host.
+(define (pio-firmware-request path lines line root)
+  (let* ([manifest (or (file-contents (join-path root "platformio.ini")) "")]
+         [environment (pio-firmware-environment manifest)])
+    (if (not environment)
+        (string-append "no environment in " root "/platformio.ini builds for a board")
+        (hash 'language 'cpp
+              'kind 'pio-firmware
+              'root root
+              'file (base-name path)
+              'filter environment
+              'line (+ line 1)
+              'environment environment
+              'chip (pio-chip manifest environment)
+              'executable (join-path root (pio-firmware-path environment))))))
+
+;; Firmware in a CMake project. The artifact is not known yet: the file API
+;; only answers after a configure, so the build resolves it.
+(define (cmake-firmware-request path lines line root build)
+  (let ([type (cmake-build-type (or (file-contents (join-path build "CMakeCache.txt")) ""))])
+    (hash 'language 'cpp
+          'kind 'cmake-firmware
+          'root root
+          'build build
+          'file (base-name path)
+          'filter (or type "the target")
+          'line (+ line 1)
+          'chip ""
+          'debuggable (build-type-debuggable?
+                       type
+                       (cmake-cache-flags
+                        (or (file-contents (join-path build "CMakeCache.txt")) ""))))))
+
+;; Whatever C and C++ flags the cache carries, so a project that adds -g by
+;; hand is not warned about needlessly.
+(define (cmake-cache-flags cache)
+  (string-append (or (cmake-build-type cache) "") " " cache))
 
 ;; Resolve the cursor into a request, or a string saying why not. The
 ;; message names what was found, because "no test here" leaves you guessing
@@ -376,6 +533,12 @@
   ;; starts, so a remembered set has to be in place before this, not after.
   (restore-breakpoints! (request-root request))
   (cond
+    ;; Every remote launch is the same shape: the adapter gets the image and
+    ;; the chip, and the breakpoint goes through helix because a flashing
+    ;; adapter takes none in its launch request.
+    [(remote-kind? (request-get request 'kind))
+     (place-breakpoint! (firmware-source request) line)
+     (helix.debug-start *firmware-template* binary (request-get request 'chip))]
     ;; A Unity program runs every test in its folder and takes no filter,
     ;; so the breakpoint is what isolates the one under the cursor. Same
     ;; template as a rust binary, for the same reason.
@@ -394,11 +557,6 @@
     ;; probe-rs takes no breakpoint in its launch request and drops the key
     ;; silently, so the breakpoint is placed in helix and helix delivers it
     ;; over setBreakpoints once the adapter is initialised.
-    [(equal? (request-get request 'kind) 'firmware)
-     (place-breakpoint! (join-path (request-root request)
-                                   (request-get request 'relative-path))
-                        line)
-     (helix.debug-start *firmware-template* binary (request-get request 'chip))]
     [else
      (helix.debug-start *cargo-template*
                         binary
@@ -494,8 +652,59 @@
 (define (build-then! request at-binary!)
   (set! *last-request* request)
   (cond [(equal? (request-get request 'kind) 'unity) (build-pio-then! request at-binary!)]
+        [(equal? (request-get request 'kind) 'pio-firmware)
+         (build-pio-firmware-then! request at-binary!)]
+        [(equal? (request-get request 'kind) 'cmake-firmware)
+         (build-cmake-firmware-then! request at-binary!)]
         [(equal? (request-get request 'language) 'cpp) (build-cpp-then! request at-binary!)]
         [else (build-rust-then! request at-binary!)]))
+
+;; Build the image PlatformIO leaves at a fixed path, with debug flags
+;; appended because its build type cannot be set per invocation.
+(define (build-pio-firmware-then! request at-binary!)
+  (let ([arguments (pio-firmware-build (request-get request 'environment))])
+    (start-job!
+     (string-append "building " (request-get request 'environment))
+     "sh"
+     (request-root request)
+     arguments
+     (lambda (output)
+       (let ([binary (request-get request 'executable)])
+         (cond
+           [(not (string? output))
+            (report-build-failure! request
+                                   (string-append "pio run -e "
+                                                  (request-get request 'environment)))]
+           [(not (path-exists? binary))
+            (report-build-failure! request
+                                   (string-append "pio run -e "
+                                                  (request-get request 'environment)))]
+           [else (at-binary! binary)]))))))
+
+;; Configure and build, then ask CMake's file API which image was produced.
+;; The query has to exist before the configure, so it is written first.
+(define (build-cmake-firmware-then! request at-binary!)
+  (let ([build (request-get request 'build)])
+    (write-codemodel-query! build)
+    (when (not (request-get request 'debuggable))
+      (status! (string-append "this build has no debug flags; "
+                              "configure it Debug or RelWithDebInfo "
+                              "or the breakpoint will not bind")))
+    (start-job!
+     (string-append "building " (base-name build))
+     "sh"
+     (request-root request)
+     (list "-c" "cmake \"$1\" >/dev/null && cmake --build \"$1\"" "sh" build)
+     (lambda (output)
+       (let ([artifact (cmake-firmware-artifact build)])
+         (cond
+           [(not (string? output))
+            (report-build-failure! request (string-append "cmake --build " build))]
+           [(not artifact)
+            (fail! (string-append "CMake's file API named no single executable in "
+                                  build
+                                  "; a project that builds several cannot have one chosen for it"))]
+           [else (at-binary! (join-path build artifact))]))))))
 
 (define (debug-request! request)
   (build-then! request
@@ -962,6 +1171,20 @@
                                             (breakpoint-count-message (length toggled))
                                             " in this workspace"))
                     (fail! (string-append "could not write " (breakpoint-store root))))))))))
+
+(define *remote-kinds* '(firmware pio-firmware cmake-firmware))
+
+(define (remote-kind? kind)
+  (member? kind *remote-kinds*))
+
+;; The file the breakpoint goes in. A rust request carries a path relative
+;; to the crate; the C and C++ ones carry only a base name, so the buffer's
+;; own path is used.
+(define (firmware-source request)
+  (let ([relative (request-get request 'relative-path)])
+    (if (string? relative)
+        (join-path (request-root request) relative)
+        (or (focused-path) (request-file request)))))
 
 ;; Place a breakpoint in helix at an absolute file and one-based line.
 ;; Helix can only toggle at the cursor, so the line has to be visited. A

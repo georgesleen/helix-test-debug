@@ -713,4 +713,159 @@
               1
               (unity-breakpoint-line 0 (list "void test_declared(void);")))
 
+
+;; cmake-cross-system?: CMAKE_CROSSCOMPILING is derived, not cached, so the
+;; two system names CMake writes are what decide
+(define cross-system
+  (string-append "set(CMAKE_HOST_SYSTEM \"Linux-7.1.8\")\n"
+                 "set(CMAKE_HOST_SYSTEM_NAME \"Linux\")\n"
+                 "set(CMAKE_SYSTEM_NAME \"Generic\")\n"
+                 "set(CMAKE_SYSTEM_PROCESSOR \"arm\")\n"))
+
+(check-true! "a system that is not the host is a cross build"
+             (cmake-cross-system? cross-system))
+(check-false! "the same system is not a cross build"
+              (cmake-cross-system? (string-append "set(CMAKE_HOST_SYSTEM_NAME \"Linux\")\n"
+                                                  "set(CMAKE_SYSTEM_NAME \"Linux\")\n")))
+(check-true! "quotes are optional in a hand-edited file"
+             (cmake-cross-system? (string-append "set(CMAKE_HOST_SYSTEM_NAME Linux)\n"
+                                                 "set(CMAKE_SYSTEM_NAME Generic)\n")))
+(check-false! "a half-written file is not evidence of cross-compiling"
+              (cmake-cross-system? "set(CMAKE_SYSTEM_NAME \"Generic\")\n"))
+(check-false! "nothing at all is not evidence either" (cmake-cross-system? ""))
+;; Any pair of differing systems counts, so no list of systems is needed.
+(check-true! "a darwin target from a linux host is cross too"
+             (cmake-cross-system? (string-append "set(CMAKE_HOST_SYSTEM_NAME Linux)\n"
+                                                 "set(CMAKE_SYSTEM_NAME Darwin)\n")))
+
+;; cmake-toolchain-file: the second, independent signal, and this one really
+;; is cached
+(check-equal! "the toolchain file a build was configured with"
+              "/w/arm.cmake"
+              (cmake-toolchain-file "CMAKE_TOOLCHAIN_FILE:FILEPATH=/w/arm.cmake\n"))
+(check-false! "a host build names none"
+              (cmake-toolchain-file "CMAKE_BUILD_TYPE:STRING=Debug\n"))
+(check-false! "an empty assignment is not a toolchain file"
+              (cmake-toolchain-file "CMAKE_TOOLCHAIN_FILE:FILEPATH=\n"))
+
+;; cmake-build-type and build-type-debuggable?: read to say when an image
+;; will carry no line table, which otherwise reads as an ignored breakpoint
+(check-equal! "the configured build type"
+              "Debug"
+              (cmake-build-type "CMAKE_BUILD_TYPE:STRING=Debug\n"))
+(check-false! "an empty build type is none"
+              (cmake-build-type "CMAKE_BUILD_TYPE:STRING=\n"))
+(check-false! "an unconfigured cache declares none" (cmake-build-type ""))
+(check-true! "Debug carries line information" (build-type-debuggable? "Debug" ""))
+(check-true! "RelWithDebInfo does too" (build-type-debuggable? "RelWithDebInfo" ""))
+(check-true! "case does not matter" (build-type-debuggable? "debug" ""))
+(check-false! "Release does not" (build-type-debuggable? "Release" ""))
+(check-false! "MinSizeRel does not" (build-type-debuggable? "MinSizeRel" ""))
+(check-false! "no build type at all does not" (build-type-debuggable? #f ""))
+;; A project that adds -g by hand must not be warned about.
+(check-true! "a hand-written -g counts whatever the type"
+             (build-type-debuggable? "Release" "-O2 -g"))
+
+;; codemodel-reply / codemodel-targets / target-artifact: CMake's file API is
+;; what answers "which image do I flash", for any project and any toolchain
+(check-equal! "the codemodel reply is found by kind"
+              "codemodel-v2-abc.json"
+              (codemodel-reply
+               (string-append "{\"objects\":["
+                              "{\"kind\":\"cache\",\"jsonFile\":\"cache-v2-x.json\"},"
+                              "{\"kind\":\"codemodel\",\"jsonFile\":\"codemodel-v2-abc.json\"}]}")))
+(check-false! "an index with no codemodel names none"
+              (codemodel-reply "{\"objects\":[{\"kind\":\"cache\",\"jsonFile\":\"c.json\"}]}"))
+;; An absent or half-written reply must not raise.
+(check-false! "text that is not json names none" (codemodel-reply "not json at all"))
+(check-false! "nothing names none" (codemodel-reply ""))
+
+(check-equal! "every target file a codemodel names, in order"
+              '("target-blinky-Debug.json" "target-support-Debug.json")
+              (codemodel-targets
+               (string-append "{\"configurations\":[{\"name\":\"Debug\",\"targets\":["
+                              "{\"name\":\"blinky\",\"jsonFile\":\"target-blinky-Debug.json\"},"
+                              "{\"name\":\"support\",\"jsonFile\":\"target-support-Debug.json\"}]}]}")))
+(check-equal! "several configurations are all read"
+              '("target-a.json" "target-b.json")
+              (codemodel-targets
+               (string-append "{\"configurations\":["
+                              "{\"targets\":[{\"jsonFile\":\"target-a.json\"}]},"
+                              "{\"targets\":[{\"jsonFile\":\"target-b.json\"}]}]}")))
+(check-equal! "a codemodel with no configurations names nothing"
+              '()
+              (codemodel-targets "{\"configurations\":[]}"))
+(check-equal! "junk names nothing" '() (codemodel-targets "}{"))
+
+(check-equal! "an executable target's artifact"
+              "blinky.elf"
+              (target-artifact
+               "{\"name\":\"blinky\",\"type\":\"EXECUTABLE\",\"artifacts\":[{\"path\":\"blinky.elf\"}]}"))
+;; A library drops out here, so nothing downstream has to know target types.
+(check-false! "a static library is not an image"
+              (target-artifact
+               "{\"name\":\"support\",\"type\":\"STATIC_LIBRARY\",\"artifacts\":[{\"path\":\"libsupport.a\"}]}"))
+(check-false! "an object library is not an image either"
+              (target-artifact "{\"type\":\"OBJECT_LIBRARY\",\"artifacts\":[{\"path\":\"o.o\"}]}"))
+(check-false! "an executable with no artifacts names none"
+              (target-artifact "{\"type\":\"EXECUTABLE\",\"artifacts\":[]}"))
+(check-false! "junk names none" (target-artifact "not json"))
+
+;; sole-artifact: flashing the wrong image means recovering the device by
+;; hand, so several are refused rather than guessed between
+(check-equal! "one executable is the image" "blinky.elf" (sole-artifact '("blinky.elf")))
+(check-false! "two executables cannot be chosen between"
+              (sole-artifact '("blinky.elf" "bootloader.elf")))
+(check-false! "none is not an image" (sole-artifact '()))
+
+;; pio-environment-platform and pio-firmware-environment: everything that is
+;; not the host is firmware, needing no list of platforms
+(define pio-manifest
+  (string-append "[platformio]\ndefault_envs = native\n"
+                 "[env]\nbuild_flags = -Wall\n"
+                 "[env:native]\nplatform = native\ntest_framework = unity\n"
+                 "[env:pico]\nplatform = raspberrypi\nboard = pico\ncustom_chip = RP2350\n"))
+
+(check-equal! "the platform an environment declares"
+              "raspberrypi"
+              (pio-environment-platform pio-manifest "pico"))
+(check-equal! "the host platform is named like any other"
+              "native"
+              (pio-environment-platform pio-manifest "native"))
+(check-false! "an environment that does not exist declares nothing"
+              (pio-environment-platform pio-manifest "esp32"))
+;; A default in [env] is not an environment's own platform.
+(check-false! "a shared section is not an environment"
+              (pio-environment-platform "[env]\nplatform = native\n" "pico"))
+
+(check-equal! "the first environment that is not the host is the firmware one"
+              "pico"
+              (pio-firmware-environment pio-manifest))
+(check-false! "a host-only project has no firmware"
+              (pio-firmware-environment "[env:native]\nplatform = native\n"))
+(check-false! "a project with no environments has none"
+              (pio-firmware-environment "[platformio]\n"))
+;; Any platform at all qualifies, which is the point.
+(check-equal! "an espressif environment is firmware too"
+              "esp"
+              (pio-firmware-environment "[env:esp]\nplatform = espressif32\n"))
+
+(check-equal! "where platformio leaves the linked image"
+              ".pio/build/pico/firmware.elf"
+              (pio-firmware-path "pico"))
+;; -Og -g2 is what PlatformIO's own debug_build_flags default to; -O0 could
+;; push an image past its flash.
+(check-equal! "the firmware build appends platformio's own debug flags"
+              '("-c" "PLATFORMIO_BUILD_FLAGS=\"-Og -g2\" exec pio \"$@\"" "pio" "run" "-e" "pico")
+              (pio-firmware-build "pico"))
+
+(check-equal! "a chip the project names for the launch"
+              "RP2350"
+              (pio-chip pio-manifest "pico"))
+;; A template that does not reference the chip is perfectly normal, so an
+;; unset chip is empty rather than missing.
+(check-equal! "an environment naming none yields the empty string"
+              ""
+              (pio-chip pio-manifest "native"))
+
 (finish!)

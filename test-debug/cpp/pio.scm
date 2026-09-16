@@ -12,6 +12,11 @@
 (require "../text.scm")
 
 (provide pio-build-arguments
+         pio-chip
+         pio-environment-platform
+         pio-firmware-build
+         pio-firmware-environment
+         pio-firmware-path
          pio-debug-build
          pio-environment
          pio-environments
@@ -122,3 +127,75 @@
           [(string-contains? (car lines) *summary-marker*)
            (loop (cdr lines) (strip-rules (car lines)))]
           [else (loop (cdr lines) outcome)])))
+
+;; The section a line opens, or #f. Assignments below it belong to it,
+;; which is what makes a per-environment lookup possible at all.
+(define (section-name line)
+  (let ([text (trim line)])
+    (if (and (starts-with? text "[") (string-contains? text "]"))
+        (identifier-prefix-until (text-after text "[") #\])
+        #f)))
+
+(define (environment-lines text environment)
+  (let loop ([lines (source-lines text)] [current #f] [found '()])
+    (cond [(empty? lines) (reverse found)]
+          [(section-name (car lines))
+           (loop (cdr lines) (section-name (car lines)) found)]
+          [(equal? current (string-append "env:" environment))
+           (loop (cdr lines) current (cons (car lines) found))]
+          [else (loop (cdr lines) current found)])))
+
+;; The value a key is assigned inside one environment, or #f. An assignment
+;; in [env] or in a sibling environment is deliberately not it: those are
+;; defaults and other people's business respectively.
+(define (environment-value text environment key)
+  (let loop ([lines (environment-lines text environment)])
+    (if (empty? lines)
+        #f
+        (let ([line (trim (car lines))])
+          (if (starts-with? line key)
+              (let ([tail (trim (text-after line key))])
+                (if (starts-with? tail "=")
+                    (trim (text-after tail "="))
+                    (loop (cdr lines))))
+              (loop (cdr lines)))))))
+
+(define (pio-environment-platform text environment)
+  (environment-value text environment "platform"))
+
+;; Everything that is not the host is firmware: the same rule the rust half
+;; uses, needing no list of platforms. raspberrypi, espressif32, ststm32, a
+;; git URL, or whatever ships next year all qualify.
+(define (pio-firmware-environment text)
+  (let loop ([environments (pio-environments text)])
+    (cond [(empty? environments) #f]
+          [(equal? (pio-environment-platform text (car environments)) *host-environment*)
+           (loop (cdr environments))]
+          [else (car environments)])))
+
+;; Where every PlatformIO platform leaves the linked image.
+(define (pio-firmware-path environment)
+  (join-path (join-path ".pio" (join-path "build" environment)) "firmware.elf"))
+
+;; -Og -g2, which is what PlatformIO's own debug_build_flags default to, so
+;; this matches what `build_type = debug` would have done. Its build type
+;; cannot be set per invocation: `pio run` has no --project-option and
+;; PLATFORMIO_BUILD_TYPE is ignored, so the flags are appended instead and
+;; win by being last.
+;;
+;; -O0 is deliberately not used here, unlike the host test build. Turning
+;; optimisation off can push an image past the flash it has to fit in, and
+;; it changes the timing of anything bit-banged. -Og is the setting meant
+;; for this: debuggable without rewriting the codegen.
+(define *firmware-build-script* "PLATFORMIO_BUILD_FLAGS=\"-Og -g2\" exec pio \"$@\"")
+
+(define (pio-firmware-build environment)
+  (list "-c" *firmware-build-script* "pio" "run" "-e" environment))
+
+;; The chip to name in the launch, from PlatformIO's own convention for
+;; options it does not define. A board name is not a chip name and is not
+;; translated into one: different namespaces, and guessing between them
+;; would flash the wrong thing.
+(define (pio-chip text environment)
+  (let ([chip (environment-value text environment "custom_chip")])
+    (if chip chip "")))

@@ -136,7 +136,37 @@ completion = [
 args = { program = "{0}", preRunCommands = [ "breakpoint set --file {1} --line {2}" ] }
 ```
 
-Four parts of that are load-bearing.
+An embedded crate needs a second adapter, because probe-rs is not lldb.
+Helix picks the debugger per language, so this replaces the rust block
+above rather than adding to it.
+
+```toml
+[language.debugger]
+name = "probe-rs"
+transport = "stdio"
+command = "probe-rs"
+args = ["dap-server"]
+
+[[language.debugger.templates]]
+name = "firmware"
+request = "launch"
+completion = [
+  { name = "elf", completion = "filename" },
+  { name = "chip" },
+]
+[language.debugger.templates.args]
+chip = "{1}"
+flashingConfig = { flashingEnabled = true, haltAfterReset = true }
+coreConfigs = [ { coreIndex = 0, programBinary = "{0}" } ]
+```
+
+`{0}` and `{1}` are substituted inside nested tables and arrays, which is
+what lets a static template carry probe-rs's structure. `transport =
+"stdio"` needs probe-rs 0.32.0 or newer; with `tcp` you also need `port-arg
+= "--port {}"` and `--single-session`, or every launch leaks a probe-rs
+process holding the probe.
+
+Four parts of the cargo template are load-bearing.
 
 `--exact` makes the filter a whole-path match, so the cog has to pass the test's
 full path (`analysis::signal::tests::settles_when_tail_in_band`) and exactly one
@@ -255,6 +285,31 @@ environment, so the build runs under `sh`, with values reaching it through
 `"$@"` rather than the script text.
 
 ## Embedded targets
+
+Firmware is mostly C and C++, and mostly built with CMake, so that is what
+this supports: Zephyr, ESP-IDF, the Pico SDK, CubeMX output and hand-written
+cross builds are all CMake underneath. PlatformIO works too. Nothing here
+knows a chip, a vendor, a toolchain or a probe.
+
+A build is firmware when the project itself says it does not run here:
+
+| project | what says so | where the image comes from |
+| --- | --- | --- |
+| cargo | a `runner` in `.cargo/config.toml` | `cargo build --message-format=json` |
+| CMake | a system name unlike the host's, or a toolchain file | CMake's file API |
+| PlatformIO | an environment whose platform is not `native` | `.pio/build/<env>/firmware.elf` |
+
+For CMake the image comes from querying the file API's `codemodel-v2`, which
+reports every target's type and artifacts. That is why a project building an
+executable beside a library needs no help telling them apart, and why
+nothing globs for `*.elf`. A project that builds *two* executables is
+refused rather than guessed at: flashing the wrong image means recovering
+the board by hand.
+
+An image with no debug flags is called out rather than launched silently,
+because a breakpoint that cannot bind looks exactly like a breakpoint the
+debugger ignored. That failure mode cost an hour of debugging here before it
+was understood.
 
 A crate whose `.cargo/config.toml` names a probe-rs runner is firmware, not
 a local program, and `:debug-here` treats it as such: it builds, then

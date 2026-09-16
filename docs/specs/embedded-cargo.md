@@ -29,21 +29,52 @@ The runner command a config declares, or `#f`.
 
 ## `(probe-rs-runner? runner)`
 
-Whether a runner flashes through probe-rs.
+Whether a runner flashes through probe-rs. This is not what decides that a
+crate is firmware — see `cross-target?` — it only decides whether a chip
+name can be read out of the runner.
 
 - `#t` when the runner's first word is `probe-rs`, or ends in `/probe-rs`
   so an absolute path still counts.
-- `#f` for `#f`, for the empty string, and for any other runner such as
-  `qemu-system-arm` or `cargo run`: recognising a runner the cog cannot
-  drive would be worse than not recognising it, because the launch would
-  be built for the wrong tool.
+- `#f` for `#f`, for the empty string, and for any other runner.
+
+## `(cross-target? triple host)`
+
+Whether a crate builds for something other than the machine it is built
+on, which is what makes a launch remote rather than local.
+
+- `#f` when `triple` is `#f`: no declared target means the host.
+- `#f` when `triple` equals `host`, since naming your own triple is not
+  cross-compiling.
+- `#t` otherwise, for any triple at all. The cog has no list of embedded
+  targets and should not have one: `thumbv6m-none-eabi`,
+  `riscv32imc-unknown-none-elf`, `xtensa-esp32s3-none-elf` and anything
+  released next year are all simply not the host.
+
+## `(remote-launch? runner)`
+
+Whether the crate's binary needs something else to run it.
+
+A declared runner *is* that statement: cargo will not execute the artifact
+directly, so neither should the cog. That single fact is the rule, and it
+is why no list of targets or tools appears anywhere here.
+
+- `#t` for any non-empty runner: `probe-rs run --chip …`,
+  `cargo-embed`, `probe-run`, `espflash flash`, `pyocd`, `qemu-system-arm`,
+  an openocd wrapper script, `ssh deploy.sh`, anything.
+- `#f` for `#f`, for the empty string, and for whitespace only.
+- The runner's identity is never consulted, and neither is the target
+  triple. Which adapter to drive, and what to tell it, is what the launch
+  template says, and that belongs to the user's `languages.toml`.
+- `cross-target?` is kept for what it is actually good for: naming the
+  target on the status line and finding the artifact directory.
 
 ## `(runner-chip runner)`
 
 The chip a probe-rs runner names, or `#f`.
 
 - The argument after `--chip`, so `probe-rs run --chip RP2040 --protocol
-  swd` is `"RP2040"`.
+  swd` is `"RP2040"`. Any chip name works: the value is whatever the
+  project wrote, not something matched against a list.
 - `--chip=RP2040` is the same chip.
 - `#f` when no `--chip` appears, and when it appears with no value after
   it. probe-rs can detect a chip itself, so this is missing information

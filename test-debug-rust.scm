@@ -20,6 +20,8 @@
          cargo-build-target
          embedded-run-arguments
          cargo-runner
+         cross-target?
+         remote-launch?
          probe-rs-runner?
          runner-chip
          breakpoint-budget

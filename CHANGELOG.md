@@ -9,7 +9,14 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   stops in the test under the cursor. A `RUN_TEST` call in the folder is
   what makes a function a test, since Unity marks nothing. `:run-here` runs
   the folder and reports PlatformIO's summary.
-- Embedded targets: a crate with a probe-rs runner launches through
+- Embedded C and C++: a cross-compiled CMake project debugs the line under
+  the cursor on the target, with the image found through CMake's own file
+  API, so Zephyr, ESP-IDF, the Pico SDK and CubeMX output all work without
+  the cog knowing any of them. PlatformIO firmware environments too.
+- Nothing is tied to one chip, vendor, toolchain or probe: a cargo crate is
+  firmware because it declares a runner, whatever that runner is, and which
+  adapter to drive is the launch template's business.
+- Embedded targets: a crate with a runner launches through
   `probe-rs dap-server` with the chip its runner names, and the breakpoint
   is delivered by Helix rather than by the launch, because probe-rs takes
   none. Debugging a single embedded test is refused with its reason.

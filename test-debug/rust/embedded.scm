@@ -13,6 +13,8 @@
 (require (only-in "cargo.scm" target-arguments))
 
 (provide artifact-directory
+         cross-target?
+         remote-launch?
          embedded-run-arguments
          cargo-build-target
          cargo-runner
@@ -116,3 +118,18 @@
           (target-arguments relative-path)
           (list "--" filter)
           *embedded-filter-flags*))
+
+;; Whether a crate builds for something other than the machine building it,
+;; which is what makes a launch remote rather than local. There is
+;; deliberately no list of embedded triples: anything that is not the host
+;; qualifies, including targets that do not exist yet.
+(define (cross-target? triple host)
+  (and (string? triple) (not (equal? triple host))))
+
+;; Whether the binary needs something else to run it. A declared runner is
+;; that statement: cargo will not execute the artifact directly, so neither
+;; should the cog. That one fact is the whole rule, which is why no list of
+;; targets or tools appears in this file. Which adapter to drive, and what
+;; to tell it, is the launch template's business.
+(define (remote-launch? runner)
+  (and (string? runner) (not (equal? (trim runner) ""))))
