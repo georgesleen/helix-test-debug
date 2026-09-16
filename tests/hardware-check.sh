@@ -13,6 +13,12 @@
 #   HARDWARE_SOURCE   file to stop in, under it       (default main.c)
 #   HARDWARE_MARKER   line to stop on, a grep pattern (default "ticks += 1")
 #   HARDWARE_CMAKE    extra configure arguments
+#   HARDWARE_FLASHING whether the launch flashes    (default true)
+#
+# HARDWARE_FLASHING=false is for a target whose image the adapter cannot
+# build by itself: an ESP-IDF app needs a bootloader and a partition table
+# alongside it, so it is flashed by its own tooling first and the launch
+# then only attaches and places the breakpoint.
 #
 # So an ESP32, an STM32 or anything else needs no code here: point these at
 # your project and name your chip. The defaults build a Pico SDK project for
@@ -32,6 +38,7 @@ project=${HARDWARE_PROJECT:-$default_project}
 source_name=${HARDWARE_SOURCE:-main.c}
 marker=${HARDWARE_MARKER:-ticks += 1}
 extra_cmake=${HARDWARE_CMAKE:-}
+flashing=${HARDWARE_FLASHING:-true}
 
 project=$(cd "$project" && pwd)
 source_file=$project/$source_name
@@ -189,7 +196,7 @@ completion = [
 ]
 [language.debugger.templates.args]
 chip = "$chip"
-flashingConfig = { flashingEnabled = true, haltAfterReset = true }
+flashingConfig = { flashingEnabled = $flashing, haltAfterReset = true }
 coreConfigs = [ { coreIndex = 0, programBinary = "{0}" } ]
 EOF
 

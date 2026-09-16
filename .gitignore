@@ -4,3 +4,4 @@ result-*
 .compile-check/
 tests/fixture/target/
 tests/fixture/.helix/
+__pycache__/

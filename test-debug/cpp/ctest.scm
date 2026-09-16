@@ -88,9 +88,25 @@
            (join-path root (car names))]
           [else (loop (cdr names))])))
 
-;; Nearest ancestor directory of a file holding a CMakeLists.txt, or #f.
+;; The project a file belongs to: the nearest ancestor that declares a
+;; CMakeLists.txt *and* has a configured build directory.
+;;
+;; Nearest-CMakeLists.txt alone is wrong for every component-based project.
+;; ESP-IDF puts a CMakeLists.txt in each component -- main/CMakeLists.txt is
+;; two lines of idf_component_register -- and Zephyr does the same, while
+;; the build lives at the top level. Stopping at the component means finding
+;; no build at all, which reads as "this is not a CMake project".
+;;
+;; A subproject configured in its own right still wins over its parent,
+;; since that is the build a user working inside it is running.
+;;
+;; Falls back to the nearest directory that declares a project when nothing
+;; above is configured, so an unconfigured tree is still recognised as CMake
+;; and reported as such rather than silently treated as something else.
 (define (project-root path exists?)
-  (let loop ([dir (parent-directory path)])
-    (cond [(equal? dir "") #f]
-          [(exists? (join-path dir "CMakeLists.txt")) dir]
-          [else (loop (parent-directory dir))])))
+  (let loop ([dir (parent-directory path)] [declared #f])
+    (cond [(equal? dir "") declared]
+          [(and (exists? (join-path dir "CMakeLists.txt")) (build-directory dir exists?)) dir]
+          [else
+           (loop (parent-directory dir)
+                 (or declared (if (exists? (join-path dir "CMakeLists.txt")) dir #f)))])))

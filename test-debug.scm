@@ -451,6 +451,10 @@
           'root root
           'build build
           'file (base-name path)
+          ;; CMake names sources relative to the top of the project, so the
+          ;; base name is not enough to match one: a file in a subdirectory
+          ;; is "main/main.c" there and would match nothing.
+          'relative-path (path-within root path)
           'filter (or type "the target")
           'line (+ line 1)
           'chip ""
@@ -695,7 +699,7 @@
      (lambda (output)
        (let ([artifact (cmake-firmware-artifact
                         build
-                        (path-within (request-root request) (request-file request)))])
+                        (request-get request 'relative-path))])
          (cond
            [(not (string? output))
             (report-build-failure! request (string-append "cmake --build " build))]

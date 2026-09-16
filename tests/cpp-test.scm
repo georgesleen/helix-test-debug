@@ -458,18 +458,45 @@
               "/w/project/src"
               (project-root "/w/project/src/math_test.cpp"
                             (files-at "/w/project/CMakeLists.txt"
-                                      "/w/project/src/CMakeLists.txt")))
+                                      "/w/project/src/CMakeLists.txt"
+                                      "/w/project/src/build/CMakeCache.txt")))
 (check-equal! "the top level CMakeLists when the subdirectory has none"
               "/w/project"
               (project-root "/w/project/src/math_test.cpp"
-                            (files-at "/w/project/CMakeLists.txt")))
+                            (files-at "/w/project/CMakeLists.txt"
+                                      "/w/project/build/CMakeCache.txt")))
 (check-equal! "the search climbs past several directories"
               "/w/project/src"
               (project-root "/w/project/src/math/vector_test.cpp"
                             (files-at "/w/project/CMakeLists.txt"
-                                      "/w/project/src/CMakeLists.txt")))
+                                      "/w/project/src/CMakeLists.txt"
+                                      "/w/project/src/build/CMakeCache.txt")))
 (check-false! "no CMakeLists anywhere above"
               (project-root "/w/project/src/math_test.cpp" (files-at)))
+
+;; ESP-IDF and Zephyr put a CMakeLists.txt in every component directory
+;; while the build stays at the top, so the nearest one is not the project.
+(check-equal! "a component's CMakeLists is not the project"
+              "/w/app"
+              (project-root "/w/app/main/main.c"
+                            (files-at "/w/app/CMakeLists.txt"
+                                      "/w/app/main/CMakeLists.txt"
+                                      "/w/app/build/CMakeCache.txt")))
+;; A subproject a user configured on its own is the build they are running.
+(check-equal! "a configured subproject wins over its parent"
+              "/w/app/tools"
+              (project-root "/w/app/tools/gen.c"
+                            (files-at "/w/app/CMakeLists.txt"
+                                      "/w/app/build/CMakeCache.txt"
+                                      "/w/app/tools/CMakeLists.txt"
+                                      "/w/app/tools/build/CMakeCache.txt")))
+;; Nothing configured anywhere: still a CMake project, and the nearest
+;; declaration is the most specific thing that can be said about it.
+(check-equal! "an unconfigured tree falls back to the nearest declaration"
+              "/w/app/main"
+              (project-root "/w/app/main/main.c"
+                            (files-at "/w/app/CMakeLists.txt"
+                                      "/w/app/main/CMakeLists.txt")))
 
 ;; A Unity translation unit shaped like the real thing: the fixture hooks,
 ;; a prototype above every definition, tests with the brace in both

@@ -16,7 +16,6 @@
 (require "test-debug/rust/embedded.scm")
 
 (provide base-name
-         artifact-directory
          cargo-build-target
          embedded-run-arguments
          cargo-runner

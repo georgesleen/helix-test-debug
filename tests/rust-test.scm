@@ -1013,22 +1013,6 @@
               (cargo-build-target "[build]\nrustflags = [\"-C\", \"target-cpu=native\"]\n"))
 (check-false! "no sections at all" (cargo-build-target ""))
 
-;; artifact-directory: where cargo left the ELF, relative to the crate root
-(check-equal! "a cross build gains a triple segment"
-              "target/thumbv6m-none-eabi/debug"
-              (artifact-directory "thumbv6m-none-eabi" "debug"))
-(check-equal! "the host layout has no triple segment"
-              "target/debug"
-              (artifact-directory #f "debug"))
-;; The profile is appended verbatim, so no second function is needed.
-(check-equal! "the release profile of a cross build"
-              "target/thumbv6m-none-eabi/release"
-              (artifact-directory "thumbv6m-none-eabi" "release"))
-(check-equal! "the release profile of a host build"
-              "target/release"
-              (artifact-directory #f "release"))
-
-
 ;; remote-launch? and cross-target?: what makes a launch remote is that the
 ;; project said it cannot run the artifact itself, not any tool's name
 (check-true! "a probe-rs runner means the binary is not run locally"

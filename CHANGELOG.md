@@ -17,6 +17,14 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   for firmware, and a project whose sources live in a library -- which is
   how ESP-IDF builds every project -- still finds its image. PlatformIO
   firmware environments too.
+- Component-based CMake projects work: the project a file belongs to is the
+  nearest ancestor that is *configured*, not the nearest with a
+  CMakeLists.txt. ESP-IDF and Zephyr put one in every component directory,
+  so the old rule stopped at `main/` and concluded the file was not part of
+  a CMake project at all.
+- A source in a subdirectory is matched against CMake's own spelling of it.
+  The cursor file was compared by base name, which only ever worked because
+  every fixture kept its sources at the top level.
 - `make hardware-check` drives `:debug-here` against a real board through a
   real adapter and asserts the DAP exchange: the image was flashed, the
   breakpoint bound, the core stopped there, target memory was readable. The

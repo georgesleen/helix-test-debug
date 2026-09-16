@@ -635,7 +635,7 @@ if ! command -v arm-none-eabi-gcc >/dev/null; then
   echo "integration-check: no arm-none-eabi-gcc, skipping the CMake firmware phase"
 else
   cmake_fixture=$root/tests/cmake-firmware-fixture
-  cmake_source=$cmake_fixture/blinky.c
+  cmake_source=$cmake_fixture/src/blinky.c
   cmake_line=$(grep -n "ticks += halve" "$cmake_source" | cut -d: -f1)
   [[ -n $cmake_line ]] || fail "no ticks line in $cmake_source"
 
@@ -683,7 +683,7 @@ else
   # component and the executable is built from a generated empty file -- so
   # an image can only be found by following CMake's link graph. Selecting
   # purely by which target compiles the file finds nothing here.
-  library_source=$cmake_fixture/support.c
+  library_source=$cmake_fixture/lib/support.c
   library_line=$(grep -n "value / 2" "$library_source" | cut -d: -f1)
   [[ -n $library_line ]] || fail "no halve line in $library_source"
 

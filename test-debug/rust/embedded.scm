@@ -12,8 +12,7 @@
 (require "../text.scm")
 (require (only-in "cargo.scm" target-arguments))
 
-(provide artifact-directory
-         cross-target?
+(provide cross-target?
          remote-launch?
          embedded-run-arguments
          cargo-build-target
@@ -96,13 +95,6 @@
           [(and in-build (assignment-value (car lines) "target"))
            (assignment-value (car lines) "target")]
           [else (loop (cdr lines) in-build)])))
-
-;; Where cargo leaves artifacts. A cross build gains a triple segment,
-;; which anything assuming the host layout would miss.
-(define (artifact-directory triple profile)
-  (if triple
-      (join-path (join-path "target" triple) profile)
-      (join-path "target" profile)))
 
 ;; Flags probe-rs accepts. The host form cannot be reused: probe-rs
 ;; declares its own argument parser rather than libtest's, and
