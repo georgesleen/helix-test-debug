@@ -61,7 +61,13 @@
                   cmake-cross-system?
                   cmake-toolchain-file
                   codemodel-reply
-                  codemodel-targets
+                  codemodel-configurations
+                  configuration-targets
+                  preset-build-directories
+                  pio-build-directory
+                  pio-default-environments
+                  pio-effective-platform
+                  pio-firmware-environments
                   firmware-artifact
                   pio-chip
                   pio-environment-platform
@@ -267,8 +273,10 @@
 ;; to its generated siblings rather than failing.
 (define (ctest-request path lines line)
   (let* ([test (cpp-test-at-line lines line (test-macros))]
-         [root (project-root path path-exists?)]
-         [build (if root (build-directory root path-exists?) #f)])
+         [root (project-root path path-exists? declared-build-directories)]
+         [build (if root
+                    (build-directory root path-exists? (declared-build-directories root))
+                    #f)])
     (cond
       [(not test) "no test macro at or above the cursor"]
       [(not root) (string-append "no CMakeLists.txt above " (base-name path))]
@@ -314,7 +322,8 @@
   (let* ([function (unity-function-at-line lines line)]
          [relative-path (path-within root path)]
          [folder (pio-test-folder relative-path)]
-         [environment (pio-environment (or (file-contents (join-path root "platformio.ini")) ""))])
+         [manifest (or (file-contents (join-path root "platformio.ini")) "")]
+         [environment (pio-environment manifest)])
     (cond
       [(not function) "no function at or above the cursor"]
       [(not folder)
@@ -338,7 +347,7 @@
              'line (unity-breakpoint-line (car (cdr function)) lines)
              'environment environment
              'folder folder
-             'executable (join-path root (pio-program-path environment)))])))
+             'executable (join-path root (pio-program-path manifest environment)))])))
 
 ;; CMake writes its system facts under a version directory, so the file has
 ;; to be looked for rather than named.
@@ -393,10 +402,24 @@
                      found))]
           [else (loop (cdr entries) found)])))
 
+;; The build directories a project's own presets declare. Both files are
+;; read: CMakeUserPresets.json is where a person's own build directories
+;; live, and it is the one likelier to name where they actually build.
+(define (declared-build-directories root)
+  (append (preset-build-directories
+           (or (file-contents (join-path root "CMakePresets.json")) ""))
+          (preset-build-directories
+           (or (file-contents (join-path root "CMakeUserPresets.json")) ""))))
+
+(define (reply-contents build name)
+  (or (file-contents (join-path (reply-directory build) name)) ""))
+
 ;; The image for the file under the cursor, from the file API's reply.
-;; Which of a project's executables that is, and whether the source is
-;; compiled into it directly or through a library, is decided in the pure
-;; half.
+;;
+;; Configurations are tried in turn, debuggable ones first, and the first
+;; that names exactly one image wins. A multi-config generator describes
+;; the same target once per configuration, so asking across all of them at
+;; once would look like a project with several images and be refused.
 (define (cmake-firmware-artifact build source)
   (let ([index (newest-index build)])
     (if (not index)
@@ -404,20 +427,25 @@
         (let ([reply (codemodel-reply (or (file-contents index) ""))])
           (if (not reply)
               #f
-              (firmware-artifact
-               (map (lambda (target)
-                      (or (file-contents (join-path (reply-directory build) target)) ""))
-                    (codemodel-targets
-                     (or (file-contents (join-path (reply-directory build) reply)) "")))
-               source))))))
+              (let loop ([configurations (codemodel-configurations
+                                          (reply-contents build reply))])
+                (if (empty? configurations)
+                    #f
+                    (let ([artifact (firmware-artifact
+                                     (map (lambda (target) (reply-contents build target))
+                                          (configuration-targets (car configurations)))
+                                     source)])
+                      (if artifact artifact (loop (cdr configurations)))))))))))
 
 ;; A project may carry both manifests. PlatformIO wins when the file is
 ;; inside its test tree, because that is the only thing that could have
 ;; built it.
 (define (cpp-request path lines line)
   (let* ([pio (pio-root path path-exists?)]
-         [root (project-root path path-exists?)]
-         [build (if root (build-directory root path-exists?) #f)])
+         [root (project-root path path-exists? declared-build-directories)]
+         [build (if root
+                    (build-directory root path-exists? (declared-build-directories root))
+                    #f)])
     (cond
       [(and pio (pio-test-folder (path-within pio path)))
        (unity-request path lines line pio)]
@@ -425,22 +453,43 @@
       [(and build (cmake-cross? build)) (cmake-firmware-request path lines line root build)]
       [else (ctest-request path lines line)])))
 
+;; Names as a user would read them out. Only refusals need this, and they
+;; are the messages most worth reading.
+(define (comma-separated names)
+  (let loop ([remaining names] [text ""])
+    (if (empty? remaining)
+        text
+        (loop (cdr remaining)
+              (string-append text (if (equal? text "") "" ", ") (car remaining))))))
+
 ;; Firmware in a PlatformIO project: everything outside test/ builds for the
 ;; board rather than the host.
+;;
+;; Several candidate boards are refused by name rather than guessed
+;; between, and the refusal says how to settle it, because default_envs is
+;; PlatformIO's own way of naming which environment is meant.
 (define (pio-firmware-request path lines line root)
   (let* ([manifest (or (file-contents (join-path root "platformio.ini")) "")]
-         [environment (pio-firmware-environment manifest)])
-    (if (not environment)
-        (string-append "no environment in " root "/platformio.ini builds for a board")
-        (hash 'language 'cpp
-              'kind 'pio-firmware
-              'root root
-              'file (base-name path)
-              'filter environment
-              'line (+ line 1)
-              'environment environment
-              'chip (pio-chip manifest environment)
-              'executable (join-path root (pio-firmware-path environment))))))
+         [environment (pio-firmware-environment manifest)]
+         [candidates (pio-firmware-environments manifest)])
+    (cond
+      [(and (not environment) (empty? candidates))
+       (string-append "no environment in " root "/platformio.ini builds for a board")]
+      [(not environment)
+       (string-append "several environments build for a board ("
+                      (comma-separated candidates)
+                      "); name the one to debug in default_envs")]
+      [else
+       (hash 'language 'cpp
+             'kind 'pio-firmware
+             'root root
+             'file (base-name path)
+             'relative-path (path-within root path)
+             'filter environment
+             'line (+ line 1)
+             'environment environment
+             'chip (pio-chip manifest environment)
+             'executable (join-path root (pio-firmware-path manifest environment)))])))
 
 ;; Firmware in a CMake project. The artifact is not known yet: the file API
 ;; only answers after a configure, so the build resolves it.
@@ -598,12 +647,33 @@
      (lambda (output)
        (let ([binary (if (string? output)
                          (if binary?
-                             (bin-executable-from-cargo-output output)
+                             (bin-executable-from-cargo-output
+                              output
+                              (join-path (request-root request) relative-path))
                              (executable-from-cargo-output output))
                          #f)])
-         (if binary
-             (at-binary! binary)
-             (report-build-failure! request (string-append "cargo " (string-join arguments " ")))))))))
+         (cond
+           [binary
+            ;; An image with no line table takes the breakpoint and never
+            ;; stops on it, which reads as a debugger fault rather than a
+            ;; build one. Said before the launch, while it is still
+            ;; attributable.
+            (when (and binary? (not (cargo-artifact-debuggable? output binary)))
+              (status! (string-append "this build carries no debug information; "
+                                      "the breakpoint will not bind")))
+            (at-binary! binary)]
+           ;; Several binaries and no way to tell which: naming them is more
+           ;; use than debugging the wrong one.
+           [(and binary?
+                 (string? output)
+                 (> (length (bin-names-from-cargo-output output)) 1))
+            (fail! (string-append "cargo built several binaries ("
+                                  (comma-separated (bin-names-from-cargo-output output))
+                                  "); put the cursor in the one to debug, "
+                                  "under src/bin/, or name it in Cargo.toml"))]
+           [else
+            (report-build-failure! request
+                                   (string-append "cargo " (string-join arguments " ")))])))))) 
 
 ;; Build the CMake project, then use the executable ctest already named.
 ;; Nothing has to be parsed out of the build: discovery happened before it.
@@ -941,8 +1011,9 @@
 ;; manifest, so nothing has to be remembered between the pick and the
 ;; launch.
 (define (debug-picked-unity! root entry)
-  (let ([environment (pio-environment (or (file-contents (join-path root "platformio.ini")) ""))]
-        [folder (pio-test-folder (discovered-path entry))])
+  (let* ([manifest (or (file-contents (join-path root "platformio.ini")) "")]
+         [environment (pio-environment manifest)]
+         [folder (pio-test-folder (discovered-path entry))])
     (if (not (and environment folder))
         (fail! (string-append "cannot resolve a PlatformIO program for "
                               (discovered-name entry)))
@@ -954,7 +1025,7 @@
                               'line (discovered-line entry)
                               'environment environment
                               'folder folder
-                              'executable (join-path root (pio-program-path environment)))))))
+                              'executable (join-path root (pio-program-path manifest environment)))))))
 
 ;;@doc
 ;; Pick a test from anywhere in the project and debug it. Type to filter,
@@ -1109,7 +1180,7 @@
 ;; The workspace a path belongs to, whichever language it is, or #f.
 (define (workspace-root path)
   (let ([crate (crate-root path path-exists?)])
-    (if crate crate (project-root path path-exists?))))
+    (if crate crate (project-root path path-exists? declared-build-directories))))
 
 (define (breakpoint-store root)
   (join-path (join-path root *breakpoint-directory*) *breakpoint-file*))
@@ -1295,18 +1366,41 @@
          (check "adapter" #t "")]
         [else (check "adapter" #f (string-append configured " is not on PATH"))]))
 
+;; What the cog asks each template for. Helix fills a template's arguments
+;; positionally, so a template with the right name and the wrong number of
+;; completions is still misconfigured, and the symptom is an adapter that
+;; appears to misbehave.
+(define *template-arities*
+  (list (list *cargo-template* 4 "tests cannot be debugged")
+        (list *program-template* 3 "a line outside a test cannot be debugged")
+        (list *binary-template* 4 "a ctest binary cannot be debugged")
+        (list *firmware-template* 2 "firmware cannot be debugged")))
+
+(define (template-check text entry)
+  (let* ([name (list-ref entry 0)]
+         [expected (list-ref entry 1)]
+         [consequence (list-ref entry 2)]
+         [arity (template-arity text name)])
+    (cond
+      [(not arity)
+       (check name
+              #f
+              (string-append "no \"" name "\" template, so " consequence "; see the README"))]
+      [(not (equal? arity expected))
+       (check name
+              #f
+              (string-append "the \"" name "\" template declares "
+                             (number->string arity)
+                             " completions but is given "
+                             (number->string expected)
+                             "; helix fills them in order, so they would not line up"))]
+      [else (check name #t "")])))
+
 (define (configuration-checks text)
   (if (not text)
       (list (check "languages.toml" #f "not found beside helix.scm; see the README"))
-      (list (check "template"
-                   (template-present? text *cargo-template*)
-                   (string-append "no \"" *cargo-template* "\" template; see the README"))
-            (check "program template"
-                   (template-present? text *program-template*)
-                   (string-append "no \""
-                                  *program-template*
-                                  "\" template, so only tests can be debugged; see the README"))
-            (adapter-check (debugger-command text)))))
+      (append (map (lambda (entry) (template-check text entry)) *template-arities*)
+              (list (adapter-check (debugger-command text))))))
 
 (define (cursor-checks)
   (let ([request (request-at-cursor)])

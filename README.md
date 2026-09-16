@@ -297,7 +297,7 @@ A build is firmware when the project itself says it does not run here:
 | --- | --- | --- |
 | cargo | a `runner` in `.cargo/config.toml` | `cargo build --message-format=json` |
 | CMake | a system name unlike the host's, or a toolchain file | CMake's file API |
-| PlatformIO | an environment whose platform is not `native` | `.pio/build/<env>/firmware.elf` |
+| PlatformIO | an environment whose platform is not `native` | `build_dir`, which defaults to `.pio/build` |
 
 For CMake the image comes from querying the file API's `codemodel-v2`,
 which reports every target's type, sources, artifacts and dependencies. The
@@ -314,6 +314,26 @@ Neither rule names a vendor or globs for `*.elf`. Two executables that both
 reach the cursor source are refused rather than guessed between: flashing
 the wrong image means recovering the board by hand.
 
+The build directory is found the same way: whatever
+`CMakePresets.json` declares, before any conventional name. A `binaryDir`
+of `out/build/default` is invisible to a guess, and presets are where a
+project states the answer.
+
+Configurations are asked one at a time, the debuggable ones first. Ninja
+Multi-Config and Visual Studio describe the same target once per
+configuration, so asking across all of them at once would look like a
+project with several images and be refused; and since the point is to
+debug, `Debug` wins over `Release`.
+
+The project a file belongs to is the nearest directory that is
+*configured*, not the nearest with a `CMakeLists.txt`. ESP-IDF and Zephyr
+put one in every component, so the nearest is the component and not the
+project.
+
+A PlatformIO project with two boards is refused by name rather than
+guessed between, and the refusal says to set `default_envs`, which is
+PlatformIO's own way of saying which environment is meant.
+
 An image with no debug flags is called out rather than launched silently,
 because a breakpoint that cannot bind looks exactly like a breakpoint the
 debugger ignored. That failure mode cost an hour of debugging here before it
@@ -325,12 +345,44 @@ something not written yet. `:debug-here` builds it and drives the user's
 `firmware` template. A `--chip` value in the runner is passed through when
 present; an adapter-specific template may ignore it or hard-code its target.
 
+A crate that builds several binaries -- a workspace, or a package with
+extra `[[bin]]` targets -- is resolved by the cursor: cargo reports each
+target's root source, so the binary whose own source you are looking at is
+the one debugged. When the cursor settles nothing, the binaries are named
+rather than one of them picked. And a build whose profile turned debug
+information off is called out before the launch, since the breakpoint
+would otherwise be taken and never hit.
+
 The breakpoint cannot ride in a probe-rs launch. probe-rs has no
 `preRunCommands` and drops unknown keys silently, so the cog places the
 breakpoint in Helix first and Helix delivers it over `setBreakpoints` once
 the adapter reports itself initialised. The integration check asserts that
 ordering against a stub, and `make hardware-check` asserts it against real
 silicon.
+
+### Attaching, and the target's own output
+
+Neither needs anything from the cog: it passes an image and a chip to
+whichever template is named `firmware`, and the rest of that template is
+yours. Two are exported so they do not have to be written out.
+
+`lib.probeRsFirmwareAttachTemplate` is `request = "attach"`, for a target
+somebody else flashed, or one whose image its own tooling has to assemble
+-- an ESP-IDF app needs a bootloader and a partition table beside it, so
+`idf.py flash` puts it there and the session only attaches. It carries no
+`flashingConfig`, because probe-rs rejects an attach request carrying any
+flashing option rather than ignoring it.
+
+`lib.probeRsFirmwareRttTemplate` adds `rttEnabled` to the core
+configuration, which is where probe-rs flattens its RTT settings. Embedded
+projects log over RTT rather than stdout, so without it `:run-here` on
+hardware prints nothing.
+
+`:debug-doctor` checks both the name and the *arity* of every template the
+cog will use. Helix fills a template's arguments positionally, so a
+`firmware` template declaring one completion is handed the image and never
+sees the chip -- which looks like the adapter misbehaving, not like a
+configuration error.
 
 ### make hardware-check
 

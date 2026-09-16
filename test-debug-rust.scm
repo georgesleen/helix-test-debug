@@ -33,6 +33,8 @@
          debugger-command
          diagnosis
          diagnosis-ok?
+         template-arity
+         template-present?
          dirty-buffer-warning
          drop-trailing-colon
          identifier-prefix
@@ -48,6 +50,8 @@
          toggle-breakpoint
          text-after
          bin-executable-from-cargo-output
+         bin-names-from-cargo-output
+         cargo-artifact-debuggable?
          binary-build-arguments
          binary-label
          binary-run-arguments

@@ -82,15 +82,47 @@ or `#f`.
 - `#f` when no object has that kind, and for text that is not JSON: an
   absent or half-written reply must not raise.
 
-## `(codemodel-targets codemodel)`
+## `(codemodel-configurations codemodel)`
 
-The target reply files a codemodel names, as a list of `jsonFile` values,
-across every configuration.
+The configurations a codemodel describes, the ones carrying debug
+information first.
 
-- The empty list for JSON with no configurations or no targets, and for
-  text that is not JSON.
-- Order is the order CMake wrote them, which is deterministic per
-  configure.
+A single-config generator reports one. Ninja Multi-Config and Visual
+Studio report every configuration they can build, and the same target
+appears in each, so merging them makes one source look like it belongs to
+several images -- which `firmware-artifact` then refuses as ambiguous. The
+caller asks one configuration at a time and stops at the first that
+answers.
+
+- `Debug` and `RelWithDebInfo` precede the rest, since the point is to
+  debug. Order within each group is the order CMake wrote them.
+- An unnamed configuration, which is what a single-config generator
+  leaves, is offered as it stands: an empty name is not a build type.
+- The empty list for JSON with no configurations, and for text that is not
+  JSON.
+
+## `(configuration-name configuration)`
+
+The configuration's name, or `""` for anything without one.
+
+## `(configuration-targets configuration)`
+
+The target reply files one configuration names, as a list of `jsonFile`
+values, in the order CMake wrote them. The empty list for a configuration
+with no targets and for anything that is not one.
+
+## `(preset-build-directories text)`
+
+The build directories `CMakePresets.json` declares, relative to the
+project, in the order written.
+
+- `${sourceDir}/` is stripped, keeping the result relative.
+- `${presetName}` is substituted, since presets commonly build it into the
+  path.
+- A `binaryDir` using any other macro is skipped rather than
+  half-expanded into a directory that does not exist.
+- The empty list for a presets file with no `configurePresets`, for a
+  preset with no `binaryDir`, and for text that is not JSON.
 
 ## `(firmware-artifact targets source)`
 

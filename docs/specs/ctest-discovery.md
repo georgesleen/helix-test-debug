@@ -45,18 +45,35 @@ The tests a cursor candidate refers to, in ctest's order.
   the picker rather than to report an error.
 - A candidate of `#f` yields the empty list.
 
-## `(build-directory root exists?)`
+## `(build-directory root exists? declared)`
 
-The build directory under a project root, or `#f`.
+The configured build directory under a project root, or `#f`.
 
-Tried in order: `build`, `cmake-build-debug`, `cmake-build-release`. The
-first whose `CMakeCache.txt` exists wins, so a configured directory is
-preferred over a merely present one. `exists?` is injected.
+`declared` comes from the project's own presets and is tried first, in
+order; then `build`, `cmake-build-debug`, `cmake-build-release`. The first
+whose `CMakeCache.txt` exists wins, so a configured directory beats a
+merely present one. `exists?` is injected.
 
-## `(project-root path exists?)`
+A name list can only find the conventions someone thought of. A project
+configured with `binaryDir` set to `out/build/default` is invisible to
+every guess, which is why what the project declares is consulted before
+any of them.
 
-The nearest ancestor directory of `path` holding a `CMakeLists.txt`, or `#f`.
+## `(project-root path exists? declared-at)`
 
-A file may sit under a subdirectory with its own `CMakeLists.txt`, so the
-nearest one wins and the caller looks for a build directory from there
-upward if it finds none.
+The project `path` belongs to: the nearest ancestor holding a
+`CMakeLists.txt` that also has a configured build directory. `declared-at`
+answers, for one directory, which build directories its presets declare;
+injected, so this stays pure.
+
+Nearest-`CMakeLists.txt` alone is wrong for every component-based project.
+ESP-IDF puts one in each component -- `main/CMakeLists.txt` is two lines of
+`idf_component_register` -- and Zephyr does the same, while the build lives
+at the top. Stopping at the component finds no build and reports the file
+as not belonging to a CMake project at all.
+
+- A subproject configured in its own right beats its parent, since that is
+  the build someone working inside it is running.
+- When nothing above is configured, the nearest directory declaring a
+  project, so an unconfigured tree is still recognised as CMake.
+- `#f` when no ancestor declares one at all.

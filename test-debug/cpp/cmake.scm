@@ -17,7 +17,10 @@
          cmake-cross-system?
          cmake-toolchain-file
          codemodel-reply
-         codemodel-targets
+         codemodel-configurations
+         configuration-name
+         configuration-targets
+         preset-build-directories
          firmware-artifact)
 
 (define (json-or-false text)
@@ -95,7 +98,13 @@
         (let ([objects (hash-try-get parsed 'objects)])
           (if (list? objects) (object-of-kind objects "codemodel") #f)))))
 
-(define (targets-of-configuration configuration)
+(define (configuration-name configuration)
+  (if (hash? configuration)
+      (let ([name (hash-try-get configuration 'name)])
+        (if (string? name) name ""))
+      ""))
+
+(define (configuration-targets configuration)
   (if (not (hash? configuration))
       '()
       (let ([targets (hash-try-get configuration 'targets)])
@@ -106,18 +115,81 @@
                            (if (hash? target) (hash-try-get target 'jsonFile) #f))
                          targets))))))
 
-(define (codemodel-targets codemodel)
+;; The configurations a codemodel describes, the ones carrying debug
+;; information first.
+;;
+;; A single-config generator reports one. Ninja Multi-Config and Visual
+;; Studio report every configuration they can build, and the same target
+;; appears in each: merging them would make one source look like it belongs
+;; to several images and be refused as ambiguous. Since the point is to
+;; debug, Debug and RelWithDebInfo are tried before the rest, and the
+;; caller stops at the first configuration that answers.
+(define (codemodel-configurations codemodel)
   (let ([parsed (json-or-false codemodel)])
     (if (not (hash? parsed))
         '()
         (let ([configurations (hash-try-get parsed 'configurations)])
           (if (not (list? configurations))
               '()
-              (let loop ([remaining configurations] [found '()])
-                (if (empty? remaining)
-                    found
-                    (loop (cdr remaining)
-                          (append found (targets-of-configuration (car remaining)))))))))))
+              (let ([present (filter hash? configurations)])
+                (append (filter (lambda (configuration)
+                                  (build-type-debuggable? (configuration-name configuration) ""))
+                                present)
+                        (filter (lambda (configuration)
+                                  (not (build-type-debuggable? (configuration-name configuration) "")))
+                                present))))))))
+
+;; The build directories CMakePresets.json declares, relative to the
+;; project, in the order written.
+;;
+;; A name list can only ever find the conventions someone thought of;
+;; presets are where a project states its own answer, and a preset with
+;; binaryDir "out/build/default" is invisible to any guess. ${sourceDir} is
+;; the project itself, so it is stripped to keep the result relative;
+;; ${presetName} is substituted because presets commonly build it into the
+;; path. A binaryDir using any other macro is skipped rather than
+;; half-expanded into a directory that does not exist.
+(define (preset-build-directories text)
+  (let ([parsed (json-or-false text)])
+    (if (not (hash? parsed))
+        '()
+        (let ([presets (hash-try-get parsed 'configurePresets)])
+          (if (not (list? presets))
+              '()
+              (filter string?
+                      (map (lambda (preset)
+                             (if (not (hash? preset))
+                                 #f
+                                 (preset-directory (hash-try-get preset 'binaryDir)
+                                                   (hash-try-get preset 'name))))
+                           presets)))))))
+
+;; Every occurrence of marker replaced. text.scm has no such helper and one
+;; macro is all this needs, so it stays local.
+(define (replace-all text marker value)
+  (let loop ([remaining text] [done ""])
+    (let ([tail (text-after remaining marker)])
+      (if (not tail)
+          (string-append done remaining)
+          (let ([head (substring remaining
+                                 0
+                                 (- (string-length remaining)
+                                    (string-length tail)
+                                    (string-length marker)))])
+            (loop tail (string-append done head value)))))))
+
+(define *source-prefix* "${sourceDir}/")
+
+(define (preset-directory binary-dir name)
+  (if (not (string? binary-dir))
+      #f
+      (let* ([relative (if (starts-with? binary-dir *source-prefix*)
+                           (text-after binary-dir *source-prefix*)
+                           binary-dir)]
+             [expanded (if (and (string? name) (string-contains? relative "${presetName}"))
+                           (replace-all relative "${presetName}" name)
+                           relative)])
+        (if (or (string-contains? expanded "${") (equal? expanded "")) #f expanded))))
 
 ;; Whether this target compiles the file under the cursor. CMake reports
 ;; project sources relative to the top-level source directory, which is the

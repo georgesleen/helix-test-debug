@@ -76,13 +76,18 @@
                       (starts-with? (ctest-test-name test) (string-append candidate "/")))
                     tests)))))
 
-;; Directory names a configured build is looked for in, in order.
+;; Directory names a configured build is looked for in, in order, when the
+;; project has not said where it builds.
 (define *build-directory-names* '("build" "cmake-build-debug" "cmake-build-release"))
 
 ;; The configured build directory under a project root, or #f. A cache file
 ;; is what distinguishes configured from merely present.
-(define (build-directory root exists?)
-  (let loop ([names *build-directory-names*])
+;;
+;; declared comes from the project's own presets and is tried first: a
+;; guess can only find conventions someone thought of, while
+;; CMakePresets.json is where a project states the answer.
+(define (build-directory root exists? declared)
+  (let loop ([names (append declared *build-directory-names*)])
     (cond [(empty? names) #f]
           [(exists? (join-path (join-path root (car names)) "CMakeCache.txt"))
            (join-path root (car names))]
@@ -103,10 +108,15 @@
 ;; Falls back to the nearest directory that declares a project when nothing
 ;; above is configured, so an unconfigured tree is still recognised as CMake
 ;; and reported as such rather than silently treated as something else.
-(define (project-root path exists?)
+;; declared-at answers "which build directories does this directory's own
+;; presets declare", so the walk can recognise a project that builds
+;; somewhere no guess would look. Injected, so this stays pure.
+(define (project-root path exists? declared-at)
   (let loop ([dir (parent-directory path)] [declared #f])
     (cond [(equal? dir "") declared]
-          [(and (exists? (join-path dir "CMakeLists.txt")) (build-directory dir exists?)) dir]
+          [(and (exists? (join-path dir "CMakeLists.txt"))
+                (build-directory dir exists? (declared-at dir)))
+           dir]
           [else
            (loop (parent-directory dir)
                  (or declared (if (exists? (join-path dir "CMakeLists.txt")) dir #f)))])))

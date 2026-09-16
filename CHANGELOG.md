@@ -5,6 +5,27 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 
 ## Unreleased
 
+- Ambiguity is refused rather than guessed at, everywhere it can arise. A
+  PlatformIO project with two boards says so and points at `default_envs`;
+  a cargo build with several binaries is resolved by which one's own source
+  is under the cursor, and otherwise names them. Flashing or debugging the
+  wrong artifact was the alternative.
+- CMake build directories come from `CMakePresets.json` before any
+  conventional name, so a project building in `out/build/default` is found.
+- Multi-config generators work: configurations are asked one at a time,
+  debuggable ones first, because Ninja Multi-Config and Visual Studio
+  describe the same target once per configuration, and asking across all of
+  them looked like a project with several images.
+- PlatformIO's `build_dir` is read rather than assumed, and an environment
+  inheriting its platform from `[env]` is understood.
+- A cargo build whose profile carries no debug information is called out
+  before the launch instead of producing a breakpoint that never binds.
+- `:debug-doctor` checks every template's name *and* arity. Helix fills
+  template arguments positionally, so a `firmware` template with one
+  completion silently never receives the chip.
+- Two debugger templates are exported for cases that needed no code:
+  `probeRsFirmwareAttachTemplate` for a target flashed by its own tooling,
+  and `probeRsFirmwareRttTemplate` for target output over RTT.
 - PlatformIO and Unity: `:debug-here` builds a test folder's program and
   stops in the test under the cursor. A `RUN_TEST` call in the folder is
   what makes a function a test, since Unity marks nothing. `:run-here` runs

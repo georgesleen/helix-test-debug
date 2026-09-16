@@ -12,10 +12,14 @@
 (require "../text.scm")
 
 (provide pio-build-arguments
+         pio-build-directory
          pio-chip
+         pio-default-environments
+         pio-effective-platform
          pio-environment-platform
          pio-firmware-build
          pio-firmware-environment
+         pio-firmware-environments
          pio-firmware-path
          pio-debug-build
          pio-environment
@@ -105,9 +109,10 @@
   (pio-selection environment folder))
 
 ;; The name is fixed for every folder in an environment, so the build and
-;; the launch have to name the same folder.
-(define (pio-program-path environment)
-  (join-path (join-path ".pio" (join-path "build" environment)) "program"))
+;; the launch have to name the same folder. The build directory is read
+;; from the manifest rather than assumed, since it is overridable.
+(define (pio-program-path text environment)
+  (join-path (join-path (pio-build-directory text) environment) "program"))
 
 (define *summary-marker* "test cases:")
 
@@ -136,20 +141,17 @@
         (identifier-prefix-until (text-after text "[") #\])
         #f)))
 
-(define (environment-lines text environment)
+(define (section-lines text section)
   (let loop ([lines (source-lines text)] [current #f] [found '()])
     (cond [(empty? lines) (reverse found)]
           [(section-name (car lines))
            (loop (cdr lines) (section-name (car lines)) found)]
-          [(equal? current (string-append "env:" environment))
-           (loop (cdr lines) current (cons (car lines) found))]
+          [(equal? current section) (loop (cdr lines) current (cons (car lines) found))]
           [else (loop (cdr lines) current found)])))
 
-;; The value a key is assigned inside one environment, or #f. An assignment
-;; in [env] or in a sibling environment is deliberately not it: those are
-;; defaults and other people's business respectively.
-(define (environment-value text environment key)
-  (let loop ([lines (environment-lines text environment)])
+;; The value a key is assigned inside one section, or #f.
+(define (section-value text section key)
+  (let loop ([lines (section-lines text section)])
     (if (empty? lines)
         #f
         (let ([line (trim (car lines))])
@@ -160,22 +162,67 @@
                     (loop (cdr lines))))
               (loop (cdr lines)))))))
 
+;; The value a key is assigned inside one environment, or #f. An assignment
+;; in [env] or in a sibling environment is deliberately not it: those are
+;; defaults and other people's business respectively.
+(define (environment-value text environment key)
+  (section-value text (string-append "env:" environment) key))
+
 (define (pio-environment-platform text environment)
   (environment-value text environment "platform"))
 
-;; Everything that is not the host is firmware: the same rule the rust half
-;; uses, needing no list of platforms. raspberrypi, espressif32, ststm32, a
-;; git URL, or whatever ships next year all qualify.
-(define (pio-firmware-environment text)
-  (let loop ([environments (pio-environments text)])
-    (cond [(empty? environments) #f]
-          [(equal? (pio-environment-platform text (car environments)) *host-environment*)
-           (loop (cdr environments))]
-          [else (car environments)])))
+;; The platform an environment actually builds for: its own, or the one
+;; [env] declares for every environment. A project that puts a single
+;; platform in [env] and varies only boards is ordinary PlatformIO.
+(define (pio-effective-platform text environment)
+  (or (pio-environment-platform text environment)
+      (section-value text "env" "platform")))
 
-;; Where every PlatformIO platform leaves the linked image.
-(define (pio-firmware-path environment)
-  (join-path (join-path ".pio" (join-path "build" environment)) "firmware.elf"))
+;; Where PlatformIO puts per-environment build directories. Overridable in
+;; the manifest, so it is read rather than assumed. PLATFORMIO_BUILD_DIR
+;; overrides this again, which is not visible from here: steel cannot read
+;; the environment, and the editor would have to be started with it set for
+;; the build to use it anyway.
+(define (pio-build-directory text)
+  (or (section-value text "platformio" "build_dir") (join-path ".pio" "build")))
+
+;; The environments default_envs names, in order, or the empty list.
+(define (pio-default-environments text)
+  (let ([value (section-value text "platformio" "default_envs")])
+    (if (not (string? value))
+        '()
+        (filter (lambda (name) (not (equal? name "")))
+                (map trim (split-many value ","))))))
+
+;; Every environment that builds for something other than the host. The
+;; same rule the rust half uses, needing no list of platforms:
+;; raspberrypi, espressif32, ststm32, a git URL, or whatever ships next
+;; year all qualify.
+(define (pio-firmware-environments text)
+  (filter (lambda (environment)
+            (not (equal? (pio-effective-platform text environment) *host-environment*)))
+          (pio-environments text)))
+
+;; The environment to flash, or #f when the project has not said.
+;;
+;; A board is not guessable: a project with an esp32dev and an
+;; esp32-s3-devkitc-1 environment would otherwise have whichever came first
+;; in the file flashed, and flashing the wrong image means recovering the
+;; board by hand. default_envs is PlatformIO's own way of saying which one
+;; is meant, so it decides when it names exactly one of them; otherwise a
+;; single candidate is unambiguous by itself, and several are refused.
+(define (pio-firmware-environment text)
+  (let* ([candidates (pio-firmware-environments text)]
+         [defaults (filter (lambda (name) (member? name candidates))
+                           (pio-default-environments text))])
+    (cond [(equal? (length defaults) 1) (car defaults)]
+          [(equal? (length candidates) 1) (car candidates)]
+          [else #f])))
+
+;; Where PlatformIO leaves the linked image, under whichever build
+;; directory the manifest declares.
+(define (pio-firmware-path text environment)
+  (join-path (join-path (pio-build-directory text) environment) "firmware.elf"))
 
 ;; -Og -g2, which is what PlatformIO's own debug_build_flags default to, so
 ;; this matches what `build_type = debug` would have done. Its build type

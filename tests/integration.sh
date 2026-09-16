@@ -639,7 +639,10 @@ else
   cmake_line=$(grep -n "ticks += halve" "$cmake_source" | cut -d: -f1)
   [[ -n $cmake_line ]] || fail "no ticks line in $cmake_source"
 
-  rm -rf "$cmake_fixture/build"
+  # The fixture also carries a preset building elsewhere. Left configured,
+  # it would be preferred over build/ -- correctly -- so the phases below
+  # that expect build/ start from nothing.
+  rm -rf "$cmake_fixture/build" "$cmake_fixture/out"
   (cd "$cmake_fixture" && cmake -S . -B build \
     -DCMAKE_TOOLCHAIN_FILE=toolchain-arm.cmake -DCMAKE_BUILD_TYPE=Debug) \
     >"$workdir/cmake-configure.txt" 2>&1 ||
@@ -717,6 +720,59 @@ else
     fail "no breakpoint on line $library_line" "$library_capture"
 
   echo "integration-check: a library-owned line reached blinky.elf through the link graph, breakpoint on line $library_line"
+
+  # The same project through its own CMakePresets.json: a binaryDir no name
+  # list would look in, built by a multi-config generator. Both rules are
+  # under test at once. The codemodel names blinky once per configuration,
+  # so a cog asking across all of them sees two images for one source and
+  # refuses; and since the point is to debug, Debug must win over Release.
+  #
+  # Skipped without ninja, since a multi-config generator is the whole
+  # point of the phase.
+  if ! command -v ninja >/dev/null; then
+    echo "integration-check: no ninja, skipping the preset and multi-config phase"
+  else
+    (cd "$cmake_fixture" && cmake --preset firmware) \
+      >"$workdir/preset-configure.txt" 2>&1 ||
+      fail "the preset does not configure" "$workdir/preset-configure.txt"
+    # Both configurations are built so that choosing between them is a real
+    # choice rather than one artifact existing.
+    for configuration in Debug Release; do
+      (cd "$cmake_fixture" && cmake --build out/build/firmware --config "$configuration") \
+        >"$workdir/preset-build-$configuration.txt" 2>&1 ||
+        fail "the preset does not build $configuration" "$workdir/preset-build-$configuration.txt"
+    done
+
+    cp "$config/helix/languages.toml.firmware" "$config/helix/languages.toml"
+    : >"$DAP_STUB_LOG"
+    preset_capture=$workdir/cmake-preset.txt
+    export SOURCE_FILE=$cmake_source
+    LINGER=40 DEADLINE=70 start_session "$preset_capture" ":$cmake_line" ":debug-here"
+
+    waited=0
+    while ! grep -q '"command": *"setBreakpoints"' "$DAP_STUB_LOG" 2>/dev/null; do
+      sleep 1
+      waited=$((waited + 1))
+      if [[ $waited -gt 50 ]]; then
+        stop_session
+        fail "no setBreakpoints for the preset build in 50s" "$preset_capture"
+      fi
+    done
+    stop_session
+    cp "$workdir/languages.toml.host" "$config/helix/languages.toml"
+
+    preset_launch=$(grep '"command": *"launch"' "$DAP_STUB_LOG" | tail -1)
+    grep -q "out/build/firmware/Debug/blinky.elf" <<<"$preset_launch" ||
+      fail "the launch did not name the preset's Debug image: $preset_launch" "$preset_capture"
+    if grep -q "Release/blinky.elf" <<<"$preset_launch"; then
+      fail "the launch named the Release image: $preset_launch" "$preset_capture"
+    fi
+    grep -qE "\"line\": *$cmake_line" <<<"$(grep '"command": *"setBreakpoints"' "$DAP_STUB_LOG" | tail -1)" ||
+      fail "no breakpoint on line $cmake_line" "$preset_capture"
+
+    rm -rf "$cmake_fixture/out"
+    echo "integration-check: a preset's binaryDir was found and Debug chosen over Release, breakpoint on line $cmake_line"
+  fi
 fi
 
 echo "integration-check: rust, C and C++, host and firmware, all work in helix"

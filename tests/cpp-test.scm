@@ -422,81 +422,73 @@
               '("Params.Case")
               (map ctest-test-name (matching-tests "Params.Case" exact-and-instances)))
 
-;; build-directory and project-root: filesystem access is injected
+;; build-directory and project-root: filesystem access is injected, and so
+;; are the build directories a project's own presets declare
+(define (no-presets directory) '())
 (define (files-at . paths)
   (lambda (candidate)
     (not (empty? (filter (lambda (path) (equal? candidate path)) paths)))))
 
 (check-equal! "build is preferred when several are configured"
               "/w/project/build"
-              (build-directory "/w/project"
-                               (files-at "/w/project/build/CMakeCache.txt"
-                                         "/w/project/cmake-build-debug/CMakeCache.txt")))
+              (build-directory "/w/project" (files-at "/w/project/build/CMakeCache.txt"
+                                         "/w/project/cmake-build-debug/CMakeCache.txt") '()))
 ;; A directory that exists but holds no cache is not configured, so the
 ;; later candidate wins.
 (check-equal! "a configured directory beats a merely present one"
               "/w/project/cmake-build-debug"
-              (build-directory "/w/project"
-                               (files-at "/w/project/build"
-                                         "/w/project/cmake-build-debug/CMakeCache.txt")))
+              (build-directory "/w/project" (files-at "/w/project/build"
+                                         "/w/project/cmake-build-debug/CMakeCache.txt") '()))
 (check-equal! "debug is tried before release"
               "/w/project/cmake-build-debug"
-              (build-directory "/w/project"
-                               (files-at "/w/project/cmake-build-debug/CMakeCache.txt"
-                                         "/w/project/cmake-build-release/CMakeCache.txt")))
+              (build-directory "/w/project" (files-at "/w/project/cmake-build-debug/CMakeCache.txt"
+                                         "/w/project/cmake-build-release/CMakeCache.txt") '()))
 (check-equal! "release is found when it is the only one"
               "/w/project/cmake-build-release"
-              (build-directory "/w/project"
-                               (files-at "/w/project/cmake-build-release/CMakeCache.txt")))
+              (build-directory "/w/project" (files-at "/w/project/cmake-build-release/CMakeCache.txt") '()))
 (check-false! "no candidate configured yields nothing"
-              (build-directory "/w/project" (files-at "/w/project/CMakeLists.txt")))
+              (build-directory "/w/project" (files-at "/w/project/CMakeLists.txt") '()))
 (check-false! "a cache outside the candidates is ignored"
-              (build-directory "/w/project" (files-at "/w/project/out/CMakeCache.txt")))
-(check-false! "nothing exists at all" (build-directory "/w/project" (files-at)))
+              (build-directory "/w/project" (files-at "/w/project/out/CMakeCache.txt") '()))
+(check-false! "nothing exists at all" (build-directory "/w/project" (files-at) '()))
 
 (check-equal! "the nearest CMakeLists wins"
               "/w/project/src"
-              (project-root "/w/project/src/math_test.cpp"
-                            (files-at "/w/project/CMakeLists.txt"
+              (project-root "/w/project/src/math_test.cpp" (files-at "/w/project/CMakeLists.txt"
                                       "/w/project/src/CMakeLists.txt"
-                                      "/w/project/src/build/CMakeCache.txt")))
+                                      "/w/project/src/build/CMakeCache.txt") no-presets))
 (check-equal! "the top level CMakeLists when the subdirectory has none"
               "/w/project"
-              (project-root "/w/project/src/math_test.cpp"
-                            (files-at "/w/project/CMakeLists.txt"
-                                      "/w/project/build/CMakeCache.txt")))
+              (project-root "/w/project/src/math_test.cpp" (files-at "/w/project/CMakeLists.txt"
+                                      "/w/project/build/CMakeCache.txt") no-presets))
 (check-equal! "the search climbs past several directories"
               "/w/project/src"
-              (project-root "/w/project/src/math/vector_test.cpp"
-                            (files-at "/w/project/CMakeLists.txt"
+              (project-root "/w/project/src/math/vector_test.cpp" (files-at "/w/project/CMakeLists.txt"
                                       "/w/project/src/CMakeLists.txt"
-                                      "/w/project/src/build/CMakeCache.txt")))
+                                      "/w/project/src/build/CMakeCache.txt") no-presets))
 (check-false! "no CMakeLists anywhere above"
-              (project-root "/w/project/src/math_test.cpp" (files-at)))
+              (project-root "/w/project/src/math_test.cpp" (files-at) no-presets))
 
 ;; ESP-IDF and Zephyr put a CMakeLists.txt in every component directory
 ;; while the build stays at the top, so the nearest one is not the project.
 (check-equal! "a component's CMakeLists is not the project"
               "/w/app"
-              (project-root "/w/app/main/main.c"
-                            (files-at "/w/app/CMakeLists.txt"
+              (project-root "/w/app/main/main.c" (files-at "/w/app/CMakeLists.txt"
                                       "/w/app/main/CMakeLists.txt"
-                                      "/w/app/build/CMakeCache.txt")))
+                                      "/w/app/build/CMakeCache.txt") no-presets))
 ;; A subproject a user configured on its own is the build they are running.
 (check-equal! "a configured subproject wins over its parent"
               "/w/app/tools"
-              (project-root "/w/app/tools/gen.c"
-                            (files-at "/w/app/CMakeLists.txt"
+              (project-root "/w/app/tools/gen.c" (files-at "/w/app/CMakeLists.txt"
                                       "/w/app/build/CMakeCache.txt"
                                       "/w/app/tools/CMakeLists.txt"
-                                      "/w/app/tools/build/CMakeCache.txt")))
+                                      "/w/app/tools/build/CMakeCache.txt") no-presets))
 ;; Nothing configured anywhere: still a CMake project, and the nearest
 ;; declaration is the most specific thing that can be said about it.
 (check-equal! "an unconfigured tree falls back to the nearest declaration"
               "/w/app/main"
-              (project-root "/w/app/main/main.c"
-                            (files-at "/w/app/CMakeLists.txt"
-                                      "/w/app/main/CMakeLists.txt")))
+              (project-root "/w/app/main/main.c" (files-at "/w/app/CMakeLists.txt"
+                                      "/w/app/main/CMakeLists.txt") no-presets))
 
 ;; A Unity translation unit shaped like the real thing: the fixture hooks,
 ;; a prototype above every definition, tests with the brace in both
@@ -807,22 +799,92 @@
 (check-false! "text that is not json names none" (codemodel-reply "not json at all"))
 (check-false! "nothing names none" (codemodel-reply ""))
 
-(check-equal! "every target file a codemodel names, in order"
+;; codemodel-configurations / configuration-targets: a multi-config
+;; generator describes the same target once per configuration, and the
+;; point is to debug, so the configurations carrying debug information are
+;; offered first
+(define (configuration-names text)
+  (map configuration-name (codemodel-configurations text)))
+
+(check-equal! "the target files of one configuration, in order"
               '("target-blinky-Debug.json" "target-support-Debug.json")
-              (codemodel-targets
-               (string-append "{\"configurations\":[{\"name\":\"Debug\",\"targets\":["
-                              "{\"name\":\"blinky\",\"jsonFile\":\"target-blinky-Debug.json\"},"
-                              "{\"name\":\"support\",\"jsonFile\":\"target-support-Debug.json\"}]}]}")))
-(check-equal! "several configurations are all read"
-              '("target-a.json" "target-b.json")
-              (codemodel-targets
+              (configuration-targets
+               (car (codemodel-configurations
+                     (string-append "{\"configurations\":[{\"name\":\"Debug\",\"targets\":["
+                                    "{\"name\":\"blinky\",\"jsonFile\":\"target-blinky-Debug.json\"},"
+                                    "{\"name\":\"support\",\"jsonFile\":\"target-support-Debug.json\"}]}]}")))))
+(check-equal! "a single configuration is offered as it stands"
+              '("Debug")
+              (configuration-names "{\"configurations\":[{\"name\":\"Debug\",\"targets\":[]}]}"))
+;; Visual Studio and Ninja Multi-Config report every configuration they
+;; can build. Release first in the file must not be tried first here.
+(check-equal! "debuggable configurations come first"
+              '("Debug" "RelWithDebInfo" "Release" "MinSizeRel")
+              (configuration-names
                (string-append "{\"configurations\":["
-                              "{\"targets\":[{\"jsonFile\":\"target-a.json\"}]},"
-                              "{\"targets\":[{\"jsonFile\":\"target-b.json\"}]}]}")))
-(check-equal! "a codemodel with no configurations names nothing"
+                              "{\"name\":\"Release\",\"targets\":[]},"
+                              "{\"name\":\"MinSizeRel\",\"targets\":[]},"
+                              "{\"name\":\"Debug\",\"targets\":[]},"
+                              "{\"name\":\"RelWithDebInfo\",\"targets\":[]}]}")))
+;; A single-config generator leaves the name empty, which is not a build
+;; type and must not be reordered away.
+(check-equal! "an unnamed configuration is still offered"
+              '("")
+              (configuration-names "{\"configurations\":[{\"targets\":[]}]}"))
+(check-equal! "a codemodel with no configurations offers none"
               '()
-              (codemodel-targets "{\"configurations\":[]}"))
-(check-equal! "junk names nothing" '() (codemodel-targets "}{"))
+              (codemodel-configurations "{\"configurations\":[]}"))
+(check-equal! "junk offers none" '() (codemodel-configurations "}{"))
+(check-equal! "the targets of something that is not a configuration"
+              '()
+              (configuration-targets "not a configuration"))
+
+;; preset-build-directories: where a project says it builds, rather than
+;; where a name list guesses
+(check-equal! "a preset's binaryDir, relative to the project"
+              '("out/build/default")
+              (preset-build-directories
+               (string-append "{\"configurePresets\":[{\"name\":\"default\","
+                              "\"binaryDir\":\"${sourceDir}/out/build/default\"}]}")))
+(check-equal! "${presetName} is substituted"
+              '("out/build/ninja-debug")
+              (preset-build-directories
+               (string-append "{\"configurePresets\":[{\"name\":\"ninja-debug\","
+                              "\"binaryDir\":\"${sourceDir}/out/build/${presetName}\"}]}")))
+(check-equal! "every preset is offered, in order"
+              '("build/debug" "build/release")
+              (preset-build-directories
+               (string-append "{\"configurePresets\":["
+                              "{\"name\":\"debug\",\"binaryDir\":\"${sourceDir}/build/debug\"},"
+                              "{\"name\":\"release\",\"binaryDir\":\"${sourceDir}/build/release\"}]}")))
+;; A macro this cannot expand would otherwise become a directory that does
+;; not exist, so such a preset is skipped rather than half-expanded.
+(check-equal! "a preset using another macro is skipped"
+              '()
+              (preset-build-directories
+               (string-append "{\"configurePresets\":[{\"name\":\"x\","
+                              "\"binaryDir\":\"${sourceDir}/build/${hostSystemName}\"}]}")))
+(check-equal! "a preset with no binaryDir is skipped"
+              '()
+              (preset-build-directories "{\"configurePresets\":[{\"name\":\"x\"}]}"))
+(check-equal! "a presets file with no configurePresets declares none"
+              '()
+              (preset-build-directories "{\"version\":6}"))
+(check-equal! "an absent presets file declares none" '() (preset-build-directories ""))
+(check-equal! "junk declares none" '() (preset-build-directories "}{"))
+
+;; build-directory: a declared directory is tried before any guess
+(check-equal! "a preset's directory wins over a conventional name"
+              "/w/project/out/build/default"
+              (build-directory "/w/project"
+                               (files-at "/w/project/out/build/default/CMakeCache.txt"
+                                         "/w/project/build/CMakeCache.txt")
+                               '("out/build/default")))
+(check-equal! "a declared directory that is not configured is skipped"
+              "/w/project/build"
+              (build-directory "/w/project"
+                               (files-at "/w/project/build/CMakeCache.txt")
+                               '("out/build/default")))
 
 ;; firmware-artifact: which of a project's executables to flash for the
 ;; file under the cursor
@@ -983,7 +1045,7 @@
 (check-false! "a shared section is not an environment"
               (pio-environment-platform "[env]\nplatform = native\n" "pico"))
 
-(check-equal! "the first environment that is not the host is the firmware one"
+(check-equal! "the one environment that is not the host is the firmware one"
               "pico"
               (pio-firmware-environment pio-manifest))
 (check-false! "a host-only project has no firmware"
@@ -992,12 +1054,64 @@
               (pio-firmware-environment "[platformio]\n"))
 ;; Any platform at all qualifies, which is the point.
 (check-equal! "an espressif environment is firmware too"
-              "esp"
-              (pio-firmware-environment "[env:esp]\nplatform = espressif32\n"))
+              "espressif"
+              (pio-firmware-environment "[env:espressif]\nplatform = espressif32\n"))
 
+;; Two boards cannot be chosen between: flashing the wrong image means
+;; recovering the board by hand, so the project has to say which it means.
+(define pio-two-boards
+  (string-append "[env:esp32dev]\nplatform = espressif32\nboard = esp32dev\n"
+                 "[env:s3]\nplatform = espressif32\nboard = esp32-s3-devkitc-1\n"))
+
+(check-false! "several boards are refused rather than guessed between"
+              (pio-firmware-environment pio-two-boards))
+(check-equal! "the caller can name them, in the order written"
+              '("esp32dev" "s3")
+              (pio-firmware-environments pio-two-boards))
+;; default_envs is PlatformIO's own way of saying which one is meant.
+(check-equal! "default_envs settles it"
+              "s3"
+              (pio-firmware-environment
+               (string-append "[platformio]\ndefault_envs = s3\n" pio-two-boards)))
+;; A default naming two is not a decision either.
+(check-false! "a default naming several is no decision"
+              (pio-firmware-environment
+               (string-append "[platformio]\ndefault_envs = esp32dev, s3\n" pio-two-boards)))
+;; A default naming the host does not make the host firmware, and does not
+;; disqualify the one board that is.
+(check-equal! "a host default leaves the single board unambiguous"
+              "pico"
+              (pio-firmware-environment pio-manifest))
+(check-equal! "default_envs as PlatformIO writes it, comma separated"
+              '("esp32dev" "s3")
+              (pio-default-environments "[platformio]\ndefault_envs = esp32dev, s3\n"))
+(check-equal! "no default_envs is no default" '() (pio-default-environments "[platformio]\n"))
+
+;; An environment inheriting its platform from [env] is ordinary
+;; PlatformIO: a project may vary only the board.
+(check-equal! "the platform comes from [env] when the environment omits it"
+              "native"
+              (pio-effective-platform "[env]\nplatform = native\n[env:host]\nboard = x\n" "host"))
+(check-equal! "an environment's own platform wins over the shared one"
+              "espressif32"
+              (pio-effective-platform
+               "[env]\nplatform = native\n[env:s3]\nplatform = espressif32\n" "s3"))
+(check-false! "a host-only project inheriting its platform has no firmware"
+              (pio-firmware-environment "[env]\nplatform = native\n[env:host]\nboard = x\n"))
+
+;; build_dir is overridable, so it is read rather than assumed.
 (check-equal! "where platformio leaves the linked image"
               ".pio/build/pico/firmware.elf"
-              (pio-firmware-path "pico"))
+              (pio-firmware-path pio-manifest "pico"))
+(check-equal! "a declared build_dir is honoured"
+              "out/pico/firmware.elf"
+              (pio-firmware-path "[platformio]\nbuild_dir = out\n" "pico"))
+(check-equal! "the host program follows the same build_dir"
+              "out/native/program"
+              (pio-program-path "[platformio]\nbuild_dir = out\n" "native"))
+(check-equal! "the default build directory"
+              ".pio/build"
+              (pio-build-directory "[platformio]\n"))
 ;; -Og -g2 is what PlatformIO's own debug_build_flags default to; -O0 could
 ;; push an image past its flash.
 (check-equal! "the firmware build appends platformio's own debug flags"

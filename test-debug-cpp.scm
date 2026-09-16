@@ -21,13 +21,20 @@
          cmake-cross-system?
          cmake-toolchain-file
          codemodel-reply
-         codemodel-targets
+         codemodel-configurations
+         configuration-name
+         configuration-targets
+         preset-build-directories
          firmware-artifact
          pio-build-arguments
          pio-debug-build
          pio-chip
          pio-environment
          pio-environment-platform
+         pio-effective-platform
+         pio-build-directory
+         pio-default-environments
+         pio-firmware-environments
          pio-firmware-build
          pio-firmware-environment
          pio-firmware-path

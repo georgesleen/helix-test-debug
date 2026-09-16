@@ -253,6 +253,57 @@
              (template-present? languages-toml "cargo test at line"))
 (check-false! "a template that is absent is reported absent"
               (template-present? languages-toml "cargo test at cursor"))
+
+;; template-arity: a name alone is not enough, because helix fills a
+;; template's arguments positionally. The two spellings below are both
+;; ordinary toml and must count the same.
+(define inline-completion-toml
+  (string-append
+   "[[language.debugger.templates]]\n"
+   "name = \"firmware\"\n"
+   "request = \"launch\"\n"
+   "completion = [ { name = \"elf\", completion = \"filename\" }, { name = \"chip\" } ]\n"
+   "[language.debugger.templates.args]\n"
+   "chip = \"{1}\"\n"))
+
+(define split-completion-toml
+  (string-append
+   "[[language.debugger.templates]]\n"
+   "name = \"program at line\"\n"
+   "request = \"launch\"\n"
+   "completion = [\n"
+   "  { name = \"binary\", completion = \"filename\" },\n"
+   "  { name = \"source file\" },\n"
+   "  { name = \"line\" },\n"
+   "]\n"
+   "args = { program = \"{0}\" }\n"))
+
+(check-equal! "completions written on one line" 2 (template-arity inline-completion-toml "firmware"))
+(check-equal! "completions written over several lines"
+              3
+              (template-arity split-completion-toml "program at line"))
+(check-false! "a template that is absent has no arity"
+              (template-arity inline-completion-toml "program at line"))
+;; A template with no completion array takes no arguments, which is a real
+;; arity and not an absence.
+(check-equal! "a template declaring no completions"
+              0
+              (template-arity
+               "[[language.debugger.templates]]\nname = \"attach\"\nrequest = \"attach\"\n"
+               "attach"))
+;; Several templates in one file must not have their counts merged, which
+;; is what the args table between them is there to provoke.
+(check-equal! "the first of several templates"
+              2
+              (template-arity (string-append inline-completion-toml split-completion-toml)
+                              "firmware"))
+(check-equal! "the last of several templates"
+              3
+              (template-arity (string-append inline-completion-toml split-completion-toml)
+                              "program at line"))
+(check-equal! "a template after a [[language]] heading is still found"
+              2
+              (template-arity (string-append languages-toml inline-completion-toml) "firmware"))
 (check-equal! "adapter command comes from the debugger table, not a language server"
               "lldb-dap-rust"
               (debugger-command languages-toml))
@@ -798,60 +849,116 @@
    "\"profile\":{\"test\":false},\"executable\":null}\n"
    "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"lib\"],\"name\":\"kitest\"},"
    "\"profile\":{\"test\":true},\"executable\":\"/w/target/debug/deps/kitest-54a5895930f6071f\"}\n"
-   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"kitest-cli\"},"
-   "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/kitest-cli\"}\n"
+   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"kitest-cli\","
+   "\"src_path\":\"/w/src/main.rs\"},"
+   "\"profile\":{\"test\":false,\"debuginfo\":2},\"executable\":\"/w/target/debug/kitest-cli\"}\n"
    "{\"reason\":\"build-finished\",\"success\":true}\n"))
 
-;; Two binaries in one package, which is what a cursor in shared library
-;; code produces. The documented cost is that the first one reported wins,
-;; the opposite of the test-target function's rule.
+;; Two binaries in one build, which is what a workspace produces and what a
+;; package with extra [[bin]] targets produces. Cargo names each target's
+;; root source, so the cursor can settle it.
 (define two-binary-cargo-output
   (string-append
-   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"tool\"},"
+   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"tool\","
+   "\"src_path\":\"/w/src/bin/tool.rs\"},"
    "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/tool\"}\n"
-   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"helper\"},"
+   "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"helper\","
+   "\"src_path\":\"/w/src/bin/helper.rs\"},"
    "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/helper\"}\n"
    "{\"reason\":\"build-finished\",\"success\":true}\n"))
 
 (check-equal! "the binary artifact is selected"
               "/w/target/debug/kitest-cli"
-              (bin-executable-from-cargo-output binary-cargo-output))
-(check-equal! "the first binary wins, not the last"
+              (bin-executable-from-cargo-output binary-cargo-output "/w/src/main.rs"))
+;; One binary needs no choosing, wherever the cursor happens to be: a line
+;; in a library module belongs to the only program there is.
+(check-equal! "the only binary wins whatever the cursor is in"
+              "/w/target/debug/kitest-cli"
+              (bin-executable-from-cargo-output binary-cargo-output "/w/src/shared/mod.rs"))
+;; Taking the first would debug the wrong program, which is the failure
+;; this rule exists to prevent.
+(check-equal! "the binary whose own source is under the cursor"
+              "/w/target/debug/helper"
+              (bin-executable-from-cargo-output two-binary-cargo-output "/w/src/bin/helper.rs"))
+(check-equal! "the other one, on the same output"
               "/w/target/debug/tool"
-              (bin-executable-from-cargo-output two-binary-cargo-output))
+              (bin-executable-from-cargo-output two-binary-cargo-output "/w/src/bin/tool.rs"))
+(check-false! "several binaries and a cursor in none of them is refused"
+              (bin-executable-from-cargo-output two-binary-cargo-output "/w/src/shared/mod.rs"))
+(check-false! "no source to compare against is no answer either"
+              (bin-executable-from-cargo-output two-binary-cargo-output #f))
+;; The refusal has to name them, or it tells the user nothing.
+(check-equal! "the binaries a build produced, for the message"
+              '("tool" "helper")
+              (bin-names-from-cargo-output two-binary-cargo-output))
+(check-equal! "one binary names one" '("kitest-cli") (bin-names-from-cargo-output binary-cargo-output))
+
 (check-false! "a build script is not a binary, executable and all"
               (bin-executable-from-cargo-output
                (string-append
                 "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"custom-build\"],\"name\":\"build-script-build\"},"
                 "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/build/kitest-1a2b3c/build-script-build\"}\n"
-                "{\"reason\":\"build-finished\",\"success\":true}\n")))
+                "{\"reason\":\"build-finished\",\"success\":true}\n")
+               "/w/build.rs"))
 (check-false! "a test artifact is not a binary"
               (bin-executable-from-cargo-output
                (string-append
                 "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"lib\"],\"name\":\"kitest\"},"
-                "\"profile\":{\"test\":true},\"executable\":\"/w/target/debug/deps/kitest-54a5895930f6071f\"}\n")))
+                "\"profile\":{\"test\":true},\"executable\":\"/w/target/debug/deps/kitest-54a5895930f6071f\"}\n")
+               "/w/src/lib.rs"))
 ;; The test build of a bin target has kind `bin` too, so the profile is
 ;; what keeps this and `executable-from-cargo-output` apart.
 (check-false! "the test build of a bin target is not a binary"
               (bin-executable-from-cargo-output
                (string-append
                 "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"tool\"},"
-                "\"profile\":{\"test\":true},\"executable\":\"/w/target/debug/deps/tool-9f1c2d3e4b5a6071\"}\n")))
+                "\"profile\":{\"test\":true},\"executable\":\"/w/target/debug/deps/tool-9f1c2d3e4b5a6071\"}\n")
+               "/w/src/bin/tool.rs"))
+
+;; cargo-artifact-debuggable?: an image with no line table takes the
+;; breakpoint and never stops on it, so it is worth saying before the
+;; launch rather than leaving it to look like a debugger fault
+(check-true! "a dev build carries debug information"
+             (cargo-artifact-debuggable? binary-cargo-output "/w/target/debug/kitest-cli"))
+(check-false! "a profile that turned debug information off"
+              (cargo-artifact-debuggable?
+               (string-append
+                "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"tool\","
+                "\"src_path\":\"/w/src/main.rs\"},"
+                "\"profile\":{\"test\":false,\"debuginfo\":0},\"executable\":\"/w/target/release/tool\"}\n")
+               "/w/target/release/tool"))
+(check-false! "cargo's newer spelling of none"
+              (cargo-artifact-debuggable?
+               (string-append
+                "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"tool\","
+                "\"src_path\":\"/w/src/main.rs\"},"
+                "\"profile\":{\"test\":false,\"debuginfo\":\"none\"},\"executable\":\"/w/target/release/tool\"}\n")
+               "/w/target/release/tool"))
+;; A missing field is the profile's default, not an absence, and warning on
+;; it would cry wolf on every ordinary build.
+(check-true! "an unstated debuginfo is not an absence"
+             (cargo-artifact-debuggable? two-binary-cargo-output "/w/target/debug/tool"))
+(check-true! "an executable the output never mentioned is not accused"
+             (cargo-artifact-debuggable? binary-cargo-output "/w/target/debug/other"))
 (check-false! "an artifact without an executable does not qualify"
               (bin-executable-from-cargo-output
                (string-append
                 "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"tool\"},"
-                "\"profile\":{\"test\":false},\"executable\":null}\n")))
+                "\"profile\":{\"test\":false},\"executable\":null}\n")
+               "/w/src/main.rs"))
 (check-false! "no artifact in the output"
-              (bin-executable-from-cargo-output "{\"reason\":\"build-finished\",\"success\":true}\n"))
+              (bin-executable-from-cargo-output "{\"reason\":\"build-finished\",\"success\":true}\n"
+                                                "/w/src/main.rs"))
 (check-false! "a build failure names no executable"
               (bin-executable-from-cargo-output
                (string-append
                 "{\"reason\":\"compiler-message\",\"message\":{\"level\":\"error\"}}\n"
-                "{\"reason\":\"build-finished\",\"success\":false}\n")))
-(check-false! "nothing was printed at all" (bin-executable-from-cargo-output ""))
+                "{\"reason\":\"build-finished\",\"success\":false}\n")
+               "/w/src/main.rs"))
+(check-false! "nothing was printed at all" (bin-executable-from-cargo-output "" "/w/src/main.rs"))
 (check-false! "compiler warnings on stdout do not derail parsing"
-              (bin-executable-from-cargo-output "warning: unused variable\nnot json at all\n"))
+              (bin-executable-from-cargo-output "warning: unused variable\nnot json at all\n"
+                                                "/w/src/main.rs"))
 ;; A json line that parses to something other than an object is skipped on
 ;; the same principle as a line that does not parse at all.
 (check-equal! "non-json and non-object lines are skipped, the artifact is still found"
@@ -864,14 +971,16 @@
                 "\"a bare string\"\n"
                 "null\n"
                 "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bin\"],\"name\":\"tool\"},"
-                "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/tool\"}\n")))
+                "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/tool\"}\n")
+               "/w/src/main.rs"))
 ;; The spec says the kind list contains `bin`, not that it is only `bin`.
 (check-equal! "a kind list containing bin among others qualifies"
               "/w/target/debug/tool"
               (bin-executable-from-cargo-output
                (string-append
                 "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"cdylib\",\"bin\"],\"name\":\"tool\"},"
-                "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/tool\"}\n")))
+                "\"profile\":{\"test\":false},\"executable\":\"/w/target/debug/tool\"}\n")
+               "/w/src/main.rs"))
 
 ;; binary-label: what the status line calls the thing about to run
 (check-equal! "a file under src/bin names its binary" "bin tool" (binary-label "src/bin/tool.rs"))

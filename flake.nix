@@ -66,6 +66,66 @@
         };
       };
 
+      # Firmware with the target's own output in the debug console. Embedded
+      # projects log over RTT rather than stdout, so without this a
+      # `:run-here` on hardware shows nothing. rttEnabled and
+      # rttChannelFormats are flattened into each core's configuration, per
+      # probe-rs's RttConfig.
+      lib.probeRsFirmwareRttTemplate = {
+        name = "firmware";
+        request = "launch";
+        completion = [
+          {
+            name = "elf";
+            completion = "filename";
+          }
+          { name = "chip"; }
+        ];
+        args = {
+          chip = "{1}";
+          flashingConfig = {
+            flashingEnabled = true;
+            haltAfterReset = true;
+          };
+          coreConfigs = [
+            {
+              coreIndex = 0;
+              programBinary = "{0}";
+              rttEnabled = true;
+            }
+          ];
+        };
+      };
+
+      # For a target somebody else flashed, or one whose image its own
+      # tooling has to assemble: an ESP-IDF app needs a bootloader and a
+      # partition table beside it, so `idf.py flash` puts it there and this
+      # only attaches. The cog drives whichever template is named
+      # `firmware`, so use this one *instead* of the launching template.
+      #
+      # No flashingConfig: probe-rs rejects an attach request carrying any
+      # flashing option rather than ignoring it.
+      lib.probeRsFirmwareAttachTemplate = {
+        name = "firmware";
+        request = "attach";
+        completion = [
+          {
+            name = "elf";
+            completion = "filename";
+          }
+          { name = "chip"; }
+        ];
+        args = {
+          chip = "{1}";
+          coreConfigs = [
+            {
+              coreIndex = 0;
+              programBinary = "{0}";
+            }
+          ];
+        };
+      };
+
       # For the crate's own binary, stopped at the cursor: a line that is not
       # in a test. A template's arguments are positional, so one with no
       # filter has to be its own template.
@@ -141,6 +201,10 @@
               # this code has: there is no Scheme formatter here on purpose,
               # see README.md.
               steel
+              # Drives the multi-config phase of the integration check,
+              # which needs a generator that builds several configurations
+              # out of one build directory.
+              ninja
               # Drives tests/pio-fixture, which the integration check uses
               # for the Unity path. Its core directory needs the network
               # once, to install the native platform.

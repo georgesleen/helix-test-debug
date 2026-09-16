@@ -82,10 +82,21 @@ process API cannot set a child's environment.
 The invocation that builds and runs it: the same without
 `--without-testing`.
 
-## `(pio-program-path environment)`
+## `(pio-build-directory text)`
 
-Where PlatformIO leaves the built program, relative to the project root:
-`.pio/build/<environment>/program`.
+Where PlatformIO puts per-environment build directories, relative to the
+project: the `build_dir` under `[platformio]`, or `.pio/build` when it
+declares none.
+
+It is overridable, so it is read rather than assumed.
+`PLATFORMIO_BUILD_DIR` overrides it again and is invisible here: steel
+cannot read the environment, and the editor would have to have been
+started with it set for the build to use it anyway.
+
+## `(pio-program-path text environment)`
+
+Where PlatformIO leaves the built test program, relative to the project
+root: `<build directory>/<environment>/program`.
 
 - The name is fixed for every test folder in an environment; the folder
   selected at build time decides which one is there, which is why the build
@@ -123,20 +134,42 @@ The `platform` an environment declares, or `#f`.
 - Returned verbatim: `native`, `raspberrypi`, `espressif32`, a git URL, or
   anything a platform can be named by.
 
+## `(pio-effective-platform text environment)`
+
+The platform an environment actually builds for: its own, or the one
+`[env]` declares for every environment. A project that puts a single
+platform in `[env]` and varies only boards is ordinary PlatformIO.
+
+## `(pio-default-environments text)`
+
+The environments `default_envs` names under `[platformio]`, in order, or
+the empty list. Comma separated, as PlatformIO writes it.
+
+## `(pio-firmware-environments text)`
+
+Every environment whose effective platform is not `native`, in the order
+written. Everything that is not the host is firmware, which is the same
+rule the rust half uses and needs no list of platforms.
+
 ## `(pio-firmware-environment text)`
 
-The environment to flash, or `#f`.
+The environment to flash, or `#f` when the project has not said which.
 
-- The first environment whose platform is not `native`. Everything that is
-  not the host is firmware, which is the same rule the rust half uses and
-  needs no list of platforms.
-- `#f` when every environment is `native`, and when there are none: a
+- The single candidate, when there is one.
+- Otherwise the one candidate `default_envs` names, since that is
+  PlatformIO's own way of saying which environment is meant.
+- `#f` for several candidates that `default_envs` does not settle. A
+  project with an `esp32dev` and an `esp32-s3-devkitc-1` environment would
+  otherwise have whichever came first in the file flashed, and flashing the
+  wrong image means recovering the board by hand. The caller names them and
+  says to set `default_envs`.
+- `#f` when every environment is the host, and when there are none: a
   host-only project has no firmware to debug.
 
-## `(pio-firmware-path environment)`
+## `(pio-firmware-path text environment)`
 
-`.pio/build/<environment>/firmware.elf`, which is where every PlatformIO
-platform leaves the linked image.
+`<build directory>/<environment>/firmware.elf`, which is where every
+PlatformIO platform leaves the linked image.
 
 ## `(pio-firmware-build environment)`
 

@@ -47,9 +47,10 @@ target arguments.
 - The message format is absent, because the point is to see the program's
   own output.
 
-## `(bin-executable-from-cargo-output text)`
+## `(bin-executable-from-cargo-output text source)`
 
-The executable of a binary artifact in cargo's JSON stream, or `#f`.
+The executable of the binary to debug, or `#f` when the output does not
+settle it. `source` is the absolute path of the file under the cursor.
 
 - An artifact qualifies when it has an `executable`, its `target.kind`
   contains `"bin"`, and its `profile.test` is not `#t`.
@@ -57,13 +58,34 @@ The executable of a binary artifact in cargo's JSON stream, or `#f`.
   though it does have an executable.
 - A test artifact is excluded, so this and
   `executable-from-cargo-output` cannot be confused for each other.
-- The **first** qualifying artifact wins, so a package with several
-  binaries resolves to whichever cargo reported first. That is the
-  documented cost of a cursor in shared library code; naming the file under
-  `src/bin/` removes the ambiguity.
+- One qualifying artifact is the answer, wherever the cursor is: a line in
+  a library module belongs to the only program there is.
+- Several are settled by `target.src_path`: the artifact whose own root
+  source is the file under the cursor. Cargo reports that path, so nothing
+  has to be guessed.
+- `#f` for several artifacts that the cursor does not settle. A workspace
+  builds every member's binary, and a package may declare extra `[[bin]]`
+  targets beside `src/main.rs`; taking the first would silently debug the
+  wrong program. The caller names them instead.
 - `#f` when no message qualifies, which is what a build failure looks like.
 - A line that is not JSON, and a JSON line that is not an object, are
   skipped rather than failing the parse.
+
+## `(bin-names-from-cargo-output text)`
+
+The names of the binaries a build produced, in order, for a refusal that
+has to say which they were.
+
+## `(cargo-artifact-debuggable? text executable)`
+
+Whether the image cargo produced for `executable` carries line
+information.
+
+- `#f` when its `profile.debuginfo` is `0` or `"none"`.
+- `#t` otherwise, including when the field is absent and when the output
+  never mentions that executable. A missing field means the profile's
+  default rather than an absence, and warning on it would cry wolf on
+  every ordinary dev build; a warning nobody believes is worse than none.
 
 ## `(binary-label relative-path)`
 

@@ -18,9 +18,27 @@ The report as one statusline-sized string.
 
 True when no check failed.
 
+## `(template-arity text name)`
+
+The number of completion entries a named debugger template declares, or
+`#f` when `languages.toml` has no such template.
+
+Arity matters as much as the name, because helix fills a template's
+arguments positionally. A `firmware` template declaring one completion is
+handed the image and never sees the chip; one declaring three is handed an
+empty string where it expected a value. Both look like the adapter
+misbehaving rather than like a configuration error.
+
+- Completion entries are tables, counted whether the array is written on
+  one line or spread over several.
+- `0` for a template declaring no `completion`, which is a real arity and
+  not an absence.
+- Counts are per template: several in one file, with `args` tables between
+  them, are not merged.
+
 ## `(template-present? text name)`
 
-True when a `languages.toml` names this debugger template.
+True when a `languages.toml` declares this debugger template at all.
 
 ## `(debugger-command text)`
 
