@@ -120,19 +120,36 @@
                     (loop (cdr remaining)
                           (append found (targets-of-configuration (car remaining)))))))))))
 
-;; The artifact of an executable target. A library drops out here rather
-;; than being named, so nothing downstream has to know target types.
-(define (target-artifact target)
+;; Whether this target compiles the file under the cursor. CMake reports
+;; project sources relative to the top-level source directory, which is the
+;; same spelling path-within produces at the call site.
+(define (target-has-source? sources source)
+  (let loop ([remaining sources])
+    (cond [(empty? remaining) #f]
+          [(and (hash? (car remaining))
+                (equal? (hash-try-get (car remaining) 'path) source))
+           #t]
+          [else (loop (cdr remaining))])))
+
+;; The artifact of the non-imported executable that compiles the file under
+;; the cursor. SDKs commonly add their own executable tools and boot stages;
+;; asking which target owns this source distinguishes the user's firmware
+;; without knowing a vendor, filename, extension, or build-system convention.
+(define (target-artifact target source)
   (let ([parsed (json-or-false target)])
-    (if (not (hash? parsed))
+    (if (or (not (hash? parsed))
+            (not (equal? (hash-try-get parsed 'type) "EXECUTABLE"))
+            (equal? (hash-try-get parsed 'imported) #t))
         #f
-        (if (not (equal? (hash-try-get parsed 'type) "EXECUTABLE"))
-            #f
-            (let ([artifacts (hash-try-get parsed 'artifacts)])
-              (if (or (not (list? artifacts)) (empty? artifacts))
-                  #f
-                  (let ([first (car artifacts)])
-                    (if (hash? first) (hash-try-get first 'path) #f))))))))
+        (let ([sources (hash-try-get parsed 'sources)]
+              [artifacts (hash-try-get parsed 'artifacts)])
+          (if (or (not (list? sources))
+                  (not (target-has-source? sources source))
+                  (not (list? artifacts))
+                  (empty? artifacts))
+              #f
+              (let ([first (car artifacts)])
+                (if (hash? first) (hash-try-get first 'path) #f)))))))
 
 ;; A project that builds two executables cannot have one chosen for it:
 ;; flashing the wrong image means physically recovering the device, so the

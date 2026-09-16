@@ -1,14 +1,14 @@
 # Embedded targets: what transfers, what does not
 
-Research notes for extending this cog to an RP2040 over a Raspberry Pi Debug
-Probe, and to PlatformIO. Nothing here is implemented. It is written down
-because the conclusions are not what you would guess, and because two of
-them cost nothing to act on while a third is blocked upstream.
+Implementation rationale for embedded debugging: what carries over from the
+host path, what must change for a remote adapter, and which apparent
+generalisations fail against real hardware.
 
-Every claim below is from source or primary docs, read on 2026-09-15. None
-of it has been run: this machine has no `probe-rs` installed and no probe
-attached, so anything implemented from these notes has to be verified
-against hardware before it can be believed.
+The source research was done on 2026-09-15. The resulting path was exercised
+end to end on 2026-09-16 with probe-rs 0.32.0, a Raspberry Pi Debug Probe and
+a Pico 2: CMake selected the firmware target, Helix sent a verified source
+breakpoint, probe-rs flashed the ELF, and continuing from reset stopped on
+that breakpoint with target variables readable.
 
 ## The hardware this was checked against
 
@@ -21,12 +21,22 @@ above, both found by plugging them in:
   four-breakpoint figure below is an RP2040 fact and does not carry over;
   probe-rs reads the count from `BP_CTRL.NUM_CODE` on the target rather
   than assuming, which is the answer that stays true either way.
-- The retail Debug Probe ships firmware older than probe-rs accepts:
-  `probe-rs info` finds the probe (`2e8a:000c-0:<serial>`) and then refuses
+- The retail Debug Probe shipped firmware older than probe-rs accepts:
+  `probe-rs info` found the probe (`2e8a:000c-0:<serial>`) and then refused
   with *"The firmware on the probe is outdated, and not supported by
-  probe-rs. The minimum supported firmware version is 2.2.0."* So a debug
-  probe out of the box is not usable here until its `debugprobe.uf2` is
-  updated, which is worth knowing before writing anything against it.
+  probe-rs. The minimum supported firmware version is 2.2.0."* Updating it
+  to Debug Probe 2.3.1 removed that failure. `probe-rs list` then identified
+  it as CMSIS-DAP, and `probe-rs info --verbose --protocol swd` enumerated
+  both Cortex-M33 cores and the RP235x CoreSight ROM.
+- Plain `probe-rs info` still cannot autodetect RP235x, and its `--chip`
+  option is explicitly ignored for that subcommand. This is not a connection
+  failure: verbose discovery works, while operational commands such as
+  `download` and the DAP launch take `--chip RP235x` successfully.
+- A real DAP trace confirmed the ordering this cog depends on. The adapter
+  verified `main.c:11`, flashed the image, stopped at reset because the
+  template requested `haltAfterReset`, accepted `continue`, then reported
+  a breakpoint stop at the exact verified address. Helix read `ticks = 0`
+  from target RAM.
 
 ## The shape of the problem
 

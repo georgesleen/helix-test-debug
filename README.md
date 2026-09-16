@@ -300,29 +300,31 @@ A build is firmware when the project itself says it does not run here:
 | PlatformIO | an environment whose platform is not `native` | `.pio/build/<env>/firmware.elf` |
 
 For CMake the image comes from querying the file API's `codemodel-v2`, which
-reports every target's type and artifacts. That is why a project building an
-executable beside a library needs no help telling them apart, and why
-nothing globs for `*.elf`. A project that builds *two* executables is
-refused rather than guessed at: flashing the wrong image means recovering
-the board by hand.
+reports every target's type, sources and artifacts. The cog selects the
+non-imported executable that compiles the file under the cursor. That drops
+out libraries as well as SDK-provided tools and boot stages without knowing
+their names or globbing for `*.elf`. Two executables that both compile the
+cursor source are refused rather than guessed between: flashing the wrong
+image means recovering the board by hand.
 
 An image with no debug flags is called out rather than launched silently,
 because a breakpoint that cannot bind looks exactly like a breakpoint the
 debugger ignored. That failure mode cost an hour of debugging here before it
 was understood.
 
-A crate whose `.cargo/config.toml` names a probe-rs runner is firmware, not
-a local program, and `:debug-here` treats it as such: it builds, then
-launches through `probe-rs dap-server`, naming the chip the runner names.
-A runner with no `--chip` is refused rather than guessed at, because the
-launch has to say what to flash.
+A cargo crate with any non-empty runner is firmware, not a local program,
+whether that runner is probe-rs, cargo-embed, pyOCD, an openocd wrapper or
+something not written yet. `:debug-here` builds it and drives the user's
+`firmware` template. A `--chip` value in the runner is passed through when
+present; an adapter-specific template may ignore it or hard-code its target.
 
-The breakpoint cannot ride in that launch. probe-rs has no
+The breakpoint cannot ride in a probe-rs launch. probe-rs has no
 `preRunCommands` and drops unknown keys silently, so the cog places the
 breakpoint in Helix first and Helix delivers it over `setBreakpoints` once
-the adapter reports itself initialised. That ordering is what the embedded
-phase of the integration check asserts, against a stub adapter: it proves
-what the editor sent, and nothing about flashing.
+the adapter reports itself initialised. The integration check asserts that
+ordering against a stub. It was also verified on a Pico 2: probe-rs accepted
+the line-11 breakpoint, flashed the ELF, continued from reset, and stopped
+on that exact address with `ticks = 0` visible in Helix.
 
 Debugging one embedded *test* is refused with a reason. Selecting a test is
 a debug-console command, which is a DAP `evaluate` request, and neither

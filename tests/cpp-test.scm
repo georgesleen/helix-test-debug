@@ -797,19 +797,47 @@
               (codemodel-targets "{\"configurations\":[]}"))
 (check-equal! "junk names nothing" '() (codemodel-targets "}{"))
 
-(check-equal! "an executable target's artifact"
+(check-equal! "the executable that owns the cursor source is the image"
               "blinky.elf"
               (target-artifact
-               "{\"name\":\"blinky\",\"type\":\"EXECUTABLE\",\"artifacts\":[{\"path\":\"blinky.elf\"}]}"))
+               (string-append "{\"name\":\"blinky\",\"type\":\"EXECUTABLE\","
+                              "\"sources\":[{\"path\":\"src/blinky.c\"}],"
+                              "\"artifacts\":[{\"path\":\"blinky.elf\"}]}")
+               "src/blinky.c"))
+;; SDK tools and boot stages are executables too. Source ownership excludes
+;; them without teaching the cog any vendor's target names or layout.
+(check-false! "an executable for another source is not the image"
+              (target-artifact
+               (string-append "{\"name\":\"boot-stage\",\"type\":\"EXECUTABLE\","
+                              "\"sources\":[{\"path\":\"sdk/boot.c\"}],"
+                              "\"artifacts\":[{\"path\":\"boot.elf\"}]}")
+               "src/blinky.c"))
+(check-false! "an imported executable is not firmware"
+              (target-artifact
+               (string-append "{\"name\":\"tool\",\"type\":\"EXECUTABLE\",\"imported\":true,"
+                              "\"sources\":[{\"path\":\"src/blinky.c\"}],"
+                              "\"artifacts\":[{\"path\":\"tool\"}]}")
+               "src/blinky.c"))
 ;; A library drops out here, so nothing downstream has to know target types.
 (check-false! "a static library is not an image"
               (target-artifact
-               "{\"name\":\"support\",\"type\":\"STATIC_LIBRARY\",\"artifacts\":[{\"path\":\"libsupport.a\"}]}"))
+               (string-append "{\"name\":\"support\",\"type\":\"STATIC_LIBRARY\","
+                              "\"sources\":[{\"path\":\"src/blinky.c\"}],"
+                              "\"artifacts\":[{\"path\":\"libsupport.a\"}]}")
+               "src/blinky.c"))
 (check-false! "an object library is not an image either"
-              (target-artifact "{\"type\":\"OBJECT_LIBRARY\",\"artifacts\":[{\"path\":\"o.o\"}]}"))
+              (target-artifact
+               "{\"type\":\"OBJECT_LIBRARY\",\"sources\":[{\"path\":\"a.c\"}],\"artifacts\":[{\"path\":\"o.o\"}]}"
+               "a.c"))
 (check-false! "an executable with no artifacts names none"
-              (target-artifact "{\"type\":\"EXECUTABLE\",\"artifacts\":[]}"))
-(check-false! "junk names none" (target-artifact "not json"))
+              (target-artifact
+               "{\"type\":\"EXECUTABLE\",\"sources\":[{\"path\":\"a.c\"}],\"artifacts\":[]}"
+               "a.c"))
+(check-false! "an executable with no sources names none"
+              (target-artifact
+               "{\"type\":\"EXECUTABLE\",\"sources\":[],\"artifacts\":[{\"path\":\"a.elf\"}]}"
+               "a.c"))
+(check-false! "junk names none" (target-artifact "not json" "a.c"))
 
 ;; sole-artifact: flashing the wrong image means recovering the device by
 ;; hand, so several are refused rather than guessed between

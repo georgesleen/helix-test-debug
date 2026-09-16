@@ -92,22 +92,28 @@ across every configuration.
 - Order is the order CMake wrote them, which is deterministic per
   configure.
 
-## `(target-artifact target)`
+## `(target-artifact target source)`
 
-The path of an executable target's artifact, relative to the build
-directory, or `#f`.
+The path of the non-imported executable target that compiles `source`,
+relative to the build directory, or `#f`.
 
-- The first `artifacts[].path` when the target's `type` is `EXECUTABLE`.
-- `#f` for any other type, so static libraries and object libraries drop
-  out without being named here.
-- `#f` for JSON that is not an object and for a target with no artifacts.
+- The first `artifacts[].path` when the target's `type` is `EXECUTABLE`,
+  `imported` is not true, and one of its `sources[].path` values equals
+  `source`.
+- `#f` for an executable that does not own the cursor source. This is what
+  removes SDK-provided executable tools and boot stages without knowing
+  their names. A real Pico SDK build exposed why type alone is insufficient:
+  its codemodel included the firmware, `picotool`, `pioasm`, the boot stage,
+  and imported Python interpreter targets.
+- `#f` for every non-executable, an imported executable, JSON that is not an
+  object, or a target with no sources or artifacts.
 
 ## `(sole-artifact artifacts)`
 
-The one image to flash, or `#f`.
+The one remaining image to flash, or `#f`.
 
 - The single element when there is exactly one.
-- `#f` for none, and `#f` for several: a project that builds two
-  executables cannot have one chosen for it, and the caller says so by
-  naming them. Guessing would flash the wrong image, which on a device
-  means physically reflashing to recover.
+- `#f` for none, and `#f` for several: if two executable targets both compile
+  the cursor source they cannot be distinguished safely. Guessing would
+  flash the wrong image, which on a device means physically reflashing to
+  recover.

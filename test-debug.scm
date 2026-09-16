@@ -394,9 +394,10 @@
                      found))]
           [else (loop (cdr entries) found)])))
 
-;; The one executable a CMake project builds, or #f when there is not
-;; exactly one. Libraries drop out in the pure half.
-(define (cmake-firmware-artifact build)
+;; The one executable that compiles the file under the cursor, or #f when
+;; there is not exactly one. SDK-provided tools and boot stages drop out in
+;; the pure half because they do not own that source.
+(define (cmake-firmware-artifact build source)
   (let ([index (newest-index build)])
     (if (not index)
         #f
@@ -410,7 +411,8 @@
                                                (target-artifact
                                                 (or (file-contents
                                                      (join-path (reply-directory build) target))
-                                                    "")))
+                                                    "")
+                                                source))
                                              targets))])
                 (sole-artifact artifacts)))))))
 
@@ -696,7 +698,9 @@
      (request-root request)
      (list "-c" "cmake \"$1\" >/dev/null && cmake --build \"$1\"" "sh" build)
      (lambda (output)
-       (let ([artifact (cmake-firmware-artifact build)])
+       (let ([artifact (cmake-firmware-artifact
+                        build
+                        (path-within (request-root request) (request-file request)))])
          (cond
            [(not (string? output))
             (report-build-failure! request (string-append "cmake --build " build))]

@@ -628,9 +628,9 @@ echo "integration-check: the embedded launch named RP235x and helix sent a break
 
 # :debug-here in a cross-compiled CMake project, which is how most firmware
 # is actually built: Zephyr, ESP-IDF, the Pico SDK and CubeMX output are all
-# CMake underneath. The image is found through CMake's own file API rather
-# than by globbing, so the fixture also builds a static library that must
-# not be picked. Skipped without a cross compiler.
+# CMake underneath. The image is found through CMake's own file API and by
+# the target that owns the cursor source. The fixture also builds a static
+# library and an SDK-like executable tool; neither may be picked.
 if ! command -v arm-none-eabi-gcc >/dev/null; then
   echo "integration-check: no arm-none-eabi-gcc, skipping the CMake firmware phase"
 else
@@ -668,13 +668,14 @@ else
   grep -q "build/blinky.elf" <<<"$cmake_launch" ||
     fail "the launch does not name the executable the file API reported: $cmake_launch" \
       "$cmake_capture"
-  if grep -q "libsupport" <<<"$cmake_launch"; then
-    fail "the launch named the static library: $cmake_launch" "$cmake_capture"
+  if grep -qE "libsupport|sdk_tool" <<<"$cmake_launch"; then
+    fail "the launch named an executable that does not own blinky.c: $cmake_launch" \
+      "$cmake_capture"
   fi
   grep -qE "\"line\": *$cmake_line" <<<"$(grep '"command": *"setBreakpoints"' "$DAP_STUB_LOG" | tail -1)" ||
     fail "no breakpoint on line $cmake_line" "$cmake_capture"
 
-  echo "integration-check: CMake's file API named blinky.elf and helix sent a breakpoint on line $cmake_line"
+  echo "integration-check: CMake selected blinky.c's image among two executables and sent a breakpoint on line $cmake_line"
 fi
 
 echo "integration-check: rust, C and C++, host and firmware, all work in helix"

@@ -10,12 +10,17 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   what makes a function a test, since Unity marks nothing. `:run-here` runs
   the folder and reports PlatformIO's summary.
 - Embedded C and C++: a cross-compiled CMake project debugs the line under
-  the cursor on the target, with the image found through CMake's own file
-  API, so Zephyr, ESP-IDF, the Pico SDK and CubeMX output all work without
-  the cog knowing any of them. PlatformIO firmware environments too.
+  the cursor on the target. The image is the non-imported executable that
+  CMake's own file API says compiles that source, so Zephyr, ESP-IDF, the
+  Pico SDK and CubeMX output work without the cog knowing any of them, and
+  the SDK's own tools and boot stages are not mistaken for firmware.
+  PlatformIO firmware environments too.
 - Nothing is tied to one chip, vendor, toolchain or probe: a cargo crate is
   firmware because it declares a runner, whatever that runner is, and which
   adapter to drive is the launch template's business.
+- Verified on hardware, not only against a stub: a Pico 2 over a Raspberry
+  Pi Debug Probe flashed from the launch, stopped on the requested source
+  line, and showed target variables in Helix.
 - Embedded targets: a crate with a runner launches through
   `probe-rs dap-server` with the chip its runner names, and the breakpoint
   is delivered by Helix rather than by the launch, because probe-rs takes
