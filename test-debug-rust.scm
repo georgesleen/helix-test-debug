@@ -36,6 +36,7 @@
          template-arity
          template-present?
          dirty-buffer-warning
+         output-report
          drop-trailing-colon
          identifier-prefix
          identifier-prefix-until

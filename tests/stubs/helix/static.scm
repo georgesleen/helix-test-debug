@@ -4,6 +4,7 @@
 
 (provide get-helix-scm-path
          get-current-line-number
+         insert_string
          dap_terminate
          dap_variables
          dap_toggle_breakpoint
@@ -14,6 +15,7 @@
 
 (define (get-helix-scm-path) "/tmp/helix.scm")
 (define (get-current-line-number) 0)
+(define (insert_string text) void)
 (define (dap_terminate) void)
 (define (dap_variables) void)
 (define (dap_toggle_breakpoint) void)

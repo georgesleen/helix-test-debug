@@ -588,6 +588,18 @@
               "saved my crate/src/lib.rs before building"
               (dirty-buffer-warning "my crate/src/lib.rs"))
 
+;; output-report: what the scratch buffer holds, which is the whole reason
+;; the output was kept
+(check-equal! "the job is named above its output"
+              "running kitest::doubles\n\nrunning 1 test\ntest result: ok.\n"
+              (output-report "running kitest::doubles" "running 1 test\ntest result: ok.\n"))
+(check-equal! "blank lines inside the output are left alone"
+              "building x\n\nerror[E0425]\n\n  --> src/lib.rs:3\n"
+              (output-report "building x" "error[E0425]\n\n  --> src/lib.rs:3"))
+(check-equal! "output with no trailing newline still ends in exactly one"
+              "running x\n\npanicked at src/lib.rs:34\n"
+              (output-report "running x" "panicked at src/lib.rs:34"))
+
 ;; compiled-source?: the paths under the crate root cargo compiles, which
 ;; is what the picker is allowed to read
 (check-true! "library root" (compiled-source? "src/lib.rs"))

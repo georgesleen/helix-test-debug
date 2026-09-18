@@ -16,6 +16,7 @@ no test filter.
 | `:test-pick` | pick a test from anywhere in the project and debug it |
 | `:debug-again` | repeat the last one from any buffer |
 | `:debug-cancel` | stop waiting on a build in flight |
+| `:debug-output` | show what the last run printed, in a scratch buffer |
 | `:debug-breakpoint` | toggle a breakpoint and remember it for this workspace |
 | `:debug-breakpoints` | place this workspace's remembered breakpoints |
 | `:debug-breakpoints-clear` | forget them |
@@ -23,9 +24,14 @@ no test filter.
 | `:debug-variables` | show the variables popup and keep it fresh |
 | `:debug-step-over` `:debug-step-in` `:debug-step-out` `:debug-continue` | step, then refresh that popup |
 
-Commands acting on the test under the cursor are prefixed `test-`, and those
-acting on a running session `debug-`, so typing either prefix in the command
-palette reveals that whole half of the feature.
+A run that fails opens its output by itself: the status line holds one line,
+and a panic, a failed assertion or a broken build says why further up.
+`:debug-output` shows that same output again, for a run that passed or one
+whose buffer has been closed. It is a scratch buffer, so `/` searches it and
+`:bc!` closes it, and the next run replaces it.
+
+Commands acting on a running session are prefixed `debug-`, so typing that
+prefix in the command palette reveals the whole feature.
 
 The test is selected by its full path with `--exact`, so a name that is a
 prefix of another does not drag it along, and the build runs off the editor

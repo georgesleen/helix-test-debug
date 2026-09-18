@@ -17,6 +17,7 @@
 (require (only-in "helix/static.scm"
                   get-helix-scm-path
                   get-current-line-number
+                  insert_string
                   dap_terminate
                   dap_variables
                   dap_toggle_breakpoint
@@ -84,6 +85,7 @@
          debug-doctor
          debug-failure
          debug-cancel
+         debug-output
          debug-breakpoint
          debug-breakpoints
          debug-breakpoints-clear
@@ -127,6 +129,12 @@
 ;; Last resolved request, so it can be repeated from another buffer.
 (define *last-request* #f)
 
+;; Everything the last job printed, and what it was, so it can be read
+;; after the status line has moved on. One slot rather than a log: the run
+;; whose output is wanted is the one that just finished.
+(define *last-output* #f)
+(define *last-output-label* #f)
+
 ;; Whether the variables popup is being kept fresh. Helix builds that
 ;; popup from a snapshot and never updates it, so stepping refreshes it
 ;; here instead.
@@ -141,6 +149,27 @@
 
 (define (fail! message)
   (set-error! (string-append "test: " message)))
+
+;; Put the last job's output in a scratch buffer, and report whether there
+;; was any. A scratch buffer rather than a file: the output is worth
+;; reading, scrolling and searching, and worth nothing once the next run
+;; replaces it.
+(define (show-output!)
+  (if (and (string? *last-output*) (not (equal? (trim *last-output*) "")))
+      (begin
+        (helix.new)
+        (insert_string (output-report *last-output-label* *last-output*))
+        (helix.goto-line 1)
+        #t)
+      #f))
+
+;; A failure that produced output opens it: the status line holds one line,
+;; and the reason a build or a run failed is usually well above the last
+;; one. The status is set after the buffer opens, so opening it does not
+;; paint over the message.
+(define (fail-with-output! message)
+  (show-output!)
+  (fail! message))
 
 (define (focused-path)
   (editor-document->path (editor->doc-id (editor-focus))))
@@ -573,6 +602,8 @@
        (hx.block-on-task
         (lambda ()
           (set! *job-label* #f)
+          (set! *last-output* output)
+          (set! *last-output-label* label)
           (complete! output))))))
   (keep-awake! label 1))
 
@@ -621,12 +652,13 @@
                           ":"
                           (number->string line))))
 
+;; The build's own output is what says why it failed, so it is opened
+;; rather than described.
 (define (report-build-failure! request command)
-  (fail! (string-append "nothing to debug; run `"
-                        command
-                        "` in "
-                        (request-root request)
-                        " to see why")))
+  (fail-with-output! (string-append "nothing to debug; `"
+                                    command
+                                    "` failed in "
+                                    (request-root request))))
 
 ;; Build the cargo target, then hand the binary cargo reported to
 ;; at-binary!, which decides where to stop. A test target and a binary
@@ -807,10 +839,16 @@
       (run-arguments (request-get request 'relative-path) (request-filter request))
       (lambda (output)
         (let ([outcome (if (string? output) (test-outcome output) #f)])
-          (if outcome
-              (status! (string-append (request-filter request) ": " outcome))
-              (fail! (string-append (request-filter request)
-                                    " printed no result; the build probably failed"))))))]))
+          (cond
+            [(not outcome)
+             (fail-with-output! (string-append (request-filter request)
+                                               " printed no result; the build probably failed"))]
+            ;; A failing test is the case the output exists for: the panic
+            ;; and whatever the test printed are above libtest's summary.
+            [(outcome-failed? outcome)
+             (show-output!)
+             (fail! (string-append (request-filter request) ": " outcome))]
+            [else (status! (string-append (request-filter request) ": " outcome))]))))]))
 
 ;; Run on the target, through the runner the crate declares. cargo run
 ;; flashes and runs; a test needs probe-rs's own flags, since it rejects
@@ -825,7 +863,7 @@
      (let ([tail (if (string? output) (last-line output) #f)])
        (cond
          [(not (string? output))
-          (fail! (string-append "could not run on " (request-filter request)))]
+          (fail-with-output! (string-append "could not run on " (request-filter request)))]
          [tail (status! (string-append (request-filter request) ": " tail))]
          [else (status! (string-append (request-filter request) " printed nothing"))])))))
 
@@ -841,8 +879,8 @@
      (let ([outcome (if (string? output) (pio-outcome output) #f)])
        (if outcome
            (status! (string-append (request-get request 'folder) ": " outcome))
-           (fail! (string-append (request-get request 'folder)
-                                 " printed no summary; the build probably failed")))))))
+           (fail-with-output! (string-append (request-get request 'folder)
+                                             " printed no summary; the build probably failed")))))))
 
 ;; Last non-blank line of some output, or #f.
 (define (last-line text)
@@ -862,15 +900,16 @@
      (let ([tail (if (string? output) (last-line output) #f)])
        (cond
          [(not (string? output))
-          (fail! (string-append "could not run " (request-filter request)))]
+          (fail-with-output! (string-append "could not run " (request-filter request)))]
          [(panic-location output)
           (let ([location (panic-location output)])
+            (show-output!)
             (fail! (string-append (request-filter request)
                                   " panicked at "
                                   (car location)
                                   ":"
                                   (number->string (car (cdr location)))
-                                  "; test-debug-failure stops there")))]
+                                  "; debug-failure stops there")))]
          [tail (status! (string-append (request-filter request) ": " tail))]
          [else (status! (string-append (request-filter request) " printed nothing"))])))))
 
@@ -1058,7 +1097,7 @@
 (define (debug-failure! request)
   (cond
     [(equal? (request-get request 'language) 'cpp)
-     (fail! "debugging a failure is rust only so far; use test-debug")]
+     (fail! "debugging a failure is rust only so far; use debug-here")]
     ;; A binary has no libtest summary, so a panic line is the whole
     ;; signal: it panicked or it did not.
     [(equal? (request-get request 'kind) 'binary)
@@ -1071,7 +1110,7 @@
         (let ([location (if (string? output) (panic-location output) #f)])
           (cond
             [(not (string? output))
-             (fail! (string-append "could not run " (request-filter request)))]
+             (fail-with-output! (string-append "could not run " (request-filter request)))]
             [(not location)
              (status! (string-append (request-filter request)
                                      " did not panic, nothing to debug"))]
@@ -1097,8 +1136,8 @@
                                      " passed, nothing to debug: "
                                      (if outcome outcome "no result")))]
             [(not location)
-             (fail! (string-append (request-filter request)
-                                   " failed but printed no panic location"))]
+             (fail-with-output! (string-append (request-filter request)
+                                               " failed but printed no panic location"))]
             [else
              (build-then! request
                           (lambda (binary)
@@ -1120,6 +1159,14 @@
         (set! *job-label* #f)
         (status! "stopped waiting"))
       (status! "nothing in flight")))
+
+;;@doc
+;; Show what the last run printed
+(define (debug-output)
+  (when (not (show-output!))
+    (status! (if (string? *last-output-label*)
+                 (string-append *last-output-label* " printed nothing")
+                 "nothing has been run yet"))))
 
 ;; Rebuild the variables popup. Helix installs it under a fixed layer id,
 ;; so this replaces the stale one rather than stacking another.

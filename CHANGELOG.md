@@ -5,6 +5,11 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 
 ## Unreleased
 
+- A run that fails shows what it printed. The panic, the failed assertion
+  or the compiler's own error opens in a scratch buffer, because helix
+  routes a debug session's output to the status line one event at a time
+  and each one overwrites the last. `:debug-output` shows the last run's
+  output again, and a passing run still reports just its summary.
 - Background commands no longer paint over the editor. Cargo reports
   progress on stderr, which was inherited from Helix and drew `Finished
   ...` and `Running unittests ...` across the TUI; stdin, stdout and

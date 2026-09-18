@@ -20,6 +20,9 @@ binaries=$fixture/target/debug/deps/fixture-
 # The test driven through the editor, and the sibling whose name extends it
 # so a filter that is not --exact drags it along.
 test_path=inner::tests::doubles
+# The module those tests live in, used to match the job label the output
+# buffer is headed with.
+test_module=${test_path%::*}
 
 skip() {
   echo "integration-check: $1, skipping"
@@ -98,6 +101,12 @@ screen() {
     tr -s ' \n'
 }
 
+# The same capture with every space removed, for matching text helix drew
+# with cursor moves in place of spaces.
+squashed() {
+  screen "$1" | tr -d ' '
+}
+
 fail() {
   local message=$1
   shift
@@ -135,6 +144,7 @@ cat >"$config/helix/helix.scm" <<'EOF'
          debug-breakpoints
          debug-failure
          debug-cancel
+         debug-output
          debug-variables
          debug-step-over
          debug-step-in
@@ -326,6 +336,51 @@ if grep -q "RUN_HERE_STDERR_SENTINEL" "$run_capture"; then
 fi
 
 echo "integration-check: run-here reported $outcome"
+
+# A failing :run-here. The panic is what the run was for, and the status
+# line holds one line, so the output has to arrive in a buffer without
+# being asked for.
+#
+# Asserted against the space-stripped screen: helix moves the cursor
+# rather than printing runs of spaces, so a phrase that reads as spaced
+# on screen is not spaced in the capture. Both markers are libtest's own,
+# and neither appears in the fixture's source or in the status line the
+# command sets, which is everything else that could be on screen.
+failing_test=panics_with_a_clear_assertion
+failing_line=$(grep -n "fn ${failing_test}()" "$source_file" | cut -d: -f1)
+[[ -n $failing_line ]] || fail "no $failing_test declaration in $source_file"
+
+output_capture=$workdir/output.txt
+rm -f "$ran_log"
+LINGER=40 DEADLINE=70 start_session "$output_capture" ":$failing_line" ":run-here"
+
+shown=
+waited=0
+while [[ $waited -lt 45 ]]; do
+  if squashed "$output_capture" | grep -q "RUST_BACKTRACE=1"; then
+    shown=yes
+    break
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
+stop_session
+
+if [[ -z $shown ]]; then
+  raised=$(engine_error "$output_capture")
+  if [[ -n $raised ]]; then
+    fail "the failing run-here raised: $raised" "$output_capture"
+  fi
+  fail "a failing run-here never opened its output in 45s" "$output_capture"
+fi
+
+squashed "$output_capture" | grep -q -- "----$test_module::${failing_test}stdout----" ||
+  fail "the output buffer does not hold the failing test's own output" "$output_capture"
+
+screen "$output_capture" | grep -q "FAILED" ||
+  fail "a failing run-here did not report the failure" "$output_capture"
+
+echo "integration-check: a failing run-here showed its panic without being asked"
 
 # Wait for a test binary stopped by a debugger, which is what a started
 # session looks like from /proc. Sets $stopped, $tracer and $seen.
