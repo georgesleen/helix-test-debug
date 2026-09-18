@@ -264,7 +264,18 @@ start_session() {
 # on the statusline, which is the only place a raised error would stop it.
 run_capture=$workdir/run.txt
 rm -f "$ran_log"
-LINGER=40 DEADLINE=70 start_session "$run_capture" ":$declaration" ":run-here"
+real_cargo=$(command -v cargo)
+mkdir -p "$workdir/run-bin"
+cat >"$workdir/run-bin/cargo" <<EOF
+#!/usr/bin/env bash
+set -u
+echo "RUN_HERE_STDERR_SENTINEL" >&2
+touch "$workdir/run-stderr-emitted"
+exec "$real_cargo" "\$@"
+EOF
+chmod +x "$workdir/run-bin/cargo"
+rm -f "$workdir/run-stderr-emitted"
+PATH="$workdir/run-bin:$PATH" LINGER=40 DEADLINE=70 start_session "$run_capture" ":$declaration" ":run-here"
 
 waited=0
 while [[ ! -s $ran_log ]]; do
@@ -304,6 +315,14 @@ fi
 
 if [[ $outcome != "test result: ok. 1 passed;" ]]; then
   fail "run-here reported \"$outcome\", not one passing test" "$run_capture"
+fi
+
+if [[ ! -e $workdir/run-stderr-emitted ]]; then
+  fail "run-here stderr wrapper never ran" "$run_capture"
+fi
+
+if grep -q "RUN_HERE_STDERR_SENTINEL" "$run_capture"; then
+  fail "run-here leaked child stderr into the terminal" "$run_capture"
 fi
 
 echo "integration-check: run-here reported $outcome"

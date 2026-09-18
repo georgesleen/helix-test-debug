@@ -150,9 +150,11 @@
 
 ;; stdout of a command run in a directory, or #f when it could not be run
 ;; at all. A command that runs and fails yields whatever it printed.
+;; Keep these noninteractive jobs off the editor's terminal: this builder
+;; pipes stdin, stdout and stderr; wait->stdout drains both output pipes.
 (define (captured-output program arguments directory)
   (let ([spawned (spawn-process
-                  (with-stdout-piped
+                  (set-stdout-piped!
                    (with-current-dir (command program arguments) directory)))])
     (if (Err? spawned)
         #f
@@ -889,25 +891,22 @@
             (begin (save-if-dirty!) (act! request))))))
 
 ;;@doc
-;; Debug the line under the cursor. In a test, builds its cargo test target
-;; and stops on the test's first line; anywhere else, builds the crate's
-;; binary and stops on the cursor itself.
+;; Debug here
 (define (debug-here)
   (with-request! debug-request!))
 
 ;;@doc
-;; Alias for debug-here.
+;; Alias for debug-here
 (define (dbgh)
   (debug-here))
 
 ;;@doc
-;; Run the line under the cursor without a debugger: a test and its result,
-;; or the crate's binary and its last line of output.
+;; Run here without a debugger
 (define (run-here)
   (with-request! run-request!))
 
 ;;@doc
-;; Debug whatever debug-here or run-here last resolved, from any buffer.
+;; Debug the last target again
 (define (debug-again)
   (cond [(job-running?) (fail! (string-append "already " *job-label*))]
         [*last-request* (debug-request! *last-request*)]
@@ -1028,8 +1027,7 @@
                               'executable (join-path root (pio-program-path manifest environment)))))))
 
 ;;@doc
-;; Pick a test from anywhere in the project and debug it. Type to filter,
-;; up and down to move, enter to debug, escape to dismiss.
+;; Pick a test to debug
 (define (test-pick)
   (let* ([path (focused-path)]
          [pio (if (string? path) (pio-root path path-exists?) #f)])
@@ -1110,14 +1108,12 @@
                                      (car (cdr location)))))]))))]))
 
 ;;@doc
-;; Run the test under the cursor and, if it fails, debug it stopped at the
-;; line that panicked.
+;; Debug a failing test at its panic
 (define (debug-failure)
   (with-request! debug-failure!))
 
 ;;@doc
-;; Stop waiting on the build in flight. Cargo keeps running; only the wait
-;; is abandoned.
+;; Stop waiting for the active job
 (define (debug-cancel)
   (if (job-running?)
       (begin
@@ -1138,8 +1134,7 @@
   (refresh-variables!))
 
 ;;@doc
-;; Show the variables popup and keep it fresh as you step. Helix builds it
-;; from a snapshot that never updates; call this again to stop refreshing.
+;; Show variables and refresh after stepping
 (define (debug-variables)
   (set! *watching-variables* (not *watching-variables*))
   (dap_variables)
@@ -1148,22 +1143,22 @@
                "variables no longer refresh")))
 
 ;;@doc
-;; Step over, refreshing the variables popup.
+;; Step over and refresh variables
 (define (debug-step-over)
   (step-then-refresh! dap_next))
 
 ;;@doc
-;; Step into, refreshing the variables popup.
+;; Step in and refresh variables
 (define (debug-step-in)
   (step-then-refresh! dap_step_in))
 
 ;;@doc
-;; Step out, refreshing the variables popup.
+;; Step out and refresh variables
 (define (debug-step-out)
   (step-then-refresh! dap_step_out))
 
 ;;@doc
-;; Continue, refreshing the variables popup at the next stop.
+;; Continue and refresh variables
 (define (debug-continue)
   (step-then-refresh! dap_continue))
 
@@ -1220,8 +1215,7 @@
                  (if (equal? count 1) " breakpoint" " breakpoints")))
 
 ;;@doc
-;; Toggle a breakpoint on the current line and remember it for this
-;; workspace, so it is still there next time the editor starts.
+;; Toggle a remembered breakpoint
 (define (debug-breakpoint)
   (let ([path (focused-path)])
     (if (not (string? path))
@@ -1315,8 +1309,7 @@
         (status! (placement-message root placement))))))
 
 ;;@doc
-;; Place this workspace's remembered breakpoints in the editor, opening
-;; each file they are in and returning to where you were.
+;; Restore remembered breakpoints
 (define (debug-breakpoints)
   (let ([path (focused-path)])
     (if (not (string? path))
@@ -1334,8 +1327,7 @@
                (status! (string-append (placement-message root placement) " in " root)))])))))
 
 ;;@doc
-;; Forget this workspace's remembered breakpoints. Breakpoints already in
-;; the editor stay where they are.
+;; Forget remembered breakpoints
 (define (debug-breakpoints-clear)
   (let ([path (focused-path)])
     (if (not (string? path))
@@ -1407,7 +1399,7 @@
     (list (check "cursor" (not (string? request)) (if (string? request) request "")))))
 
 ;;@doc
-;; Report whether everything test-debug needs is in place, and what to fix.
+;; Check the debug setup
 (define (debug-doctor)
   (let ([checks (append (list (check "cargo" (if (which "cargo") #t #f) "cargo is not on PATH"))
                         (configuration-checks (languages-toml))

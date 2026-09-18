@@ -5,6 +5,14 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 
 ## Unreleased
 
+- Background commands no longer paint over the editor. Cargo reports
+  progress on stderr, which was inherited from Helix and drew `Finished
+  ...` and `Running unittests ...` across the TUI; stdin, stdout and
+  stderr are all piped now, so a `:run-here` shows only its statusline
+  result. The integration check proves it against a real Helix.
+- Every command's help text is one short line, so `<space>G` and the
+  command palette list them the way Helix lists its own debug commands
+  instead of wrapping and pushing entries off the panel.
 - Verified on a second architecture: an ESP32-S3 over its built-in
   USB-JTAG, with a real ESP-IDF project. `make hardware-check` takes
   `HARDWARE_REQUEST=attach` for it, which is the only thing that works on
