@@ -48,10 +48,11 @@
 
 ;; Full cargo invocation that builds and runs exactly one test.
 (define (run-arguments relative-path filter)
-  (append (list "test")
+  (append (list "test" "--color=always")
           (target-arguments relative-path)
           (list "--" filter)
-          *filter-flags*))
+          *filter-flags*
+          (list "--color=always")))
 
 (define (parse-json-line line)
   (let ([text (trim line)])

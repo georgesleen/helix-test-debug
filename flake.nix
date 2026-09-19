@@ -9,6 +9,13 @@
       forAllSystems = nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed;
     in
     {
+      lib.helixOutputPatch = ./patches/helix-output.patch;
+      lib.patchHelix =
+        package:
+        package.overrideAttrs (old: {
+          patches = (old.patches or [ ]) ++ [ ./patches/helix-output.patch ];
+        });
+
       # The debugger templates the cog drives. Splice them into the templates
       # list of your own language entry; a second [[language]] entry for the
       # same name would not merge.
@@ -32,6 +39,7 @@
             "--include-ignored"
             "--test-threads=1"
             "--nocapture"
+            "--color=always"
           ];
           preRunCommands = [ "breakpoint set --file {2} --line {3}" ];
         };

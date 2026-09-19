@@ -16,7 +16,7 @@ no test filter.
 | `:test-pick` | pick a test from anywhere in the project and debug it |
 | `:debug-again` | repeat the last one from any buffer |
 | `:debug-cancel` | stop waiting on a build in flight |
-| `:debug-output` | show what the last run printed, in a scratch buffer |
+| `:debug-output` | show what the last run or debug session printed |
 | `:debug-breakpoint` | toggle a breakpoint and remember it for this workspace |
 | `:debug-breakpoints` | place this workspace's remembered breakpoints |
 | `:debug-breakpoints-clear` | forget them |
@@ -24,11 +24,13 @@ no test filter.
 | `:debug-variables` | show the variables popup and keep it fresh |
 | `:debug-step-over` `:debug-step-in` `:debug-step-out` `:debug-continue` | step, then refresh that popup |
 
-A run that fails opens its output by itself: the status line holds one line,
-and a panic, a failed assertion or a broken build says why further up.
-`:debug-output` shows that same output again, for a run that passed or one
-whose buffer has been closed. It is a scratch buffer, so `/` searches it and
-`:bc!` closes it, and the next run replaces it.
+A run or debug session that fails opens its output by itself: the status
+line holds one line, while a panic, failed assertion or broken build says
+why further up. ANSI colours are rendered as native buffer styles rather
+than escape codes, so cargo and libtest output keeps its normal colours.
+`:debug-output` shows the same output again after a passing run or after
+its buffer has been closed. The output is a scratch buffer, so `/` searches
+it, `:bc!` closes it, and the next run replaces it.
 
 Commands acting on a running session are prefixed `debug-`, so typing that
 prefix in the command palette reveals the whole feature.
@@ -50,36 +52,51 @@ Rust is complete. C and C++ debug the test under the cursor through CMake and
 ctest: see [C and C++](#c-and-c) below for what works and what does not yet.
 
 Requires [Helix with the Steel plugin
-system](https://github.com/mattwparas/helix/tree/steel-event-system), a DAP
-adapter (`lldb-dap`), and `cargo` or `cmake` and `ctest`.
+system](https://github.com/mattwparas/helix/tree/steel-event-system), the
+native output patch shipped here, a DAP adapter (`lldb-dap`), and `cargo`
+or `cmake` and `ctest`.
 
 ## Install
+
+Apply the Helix side before building that fork:
+
+```
+git -C /path/to/helix apply /path/to/helix-test-debug/patches/helix-output.patch
+```
 
 Copy the cog into your Helix configuration directory:
 
 ```
-cp test-debug.scm test-debug-rust.scm test-debug-cpp.scm ~/.config/helix/cogs/
+cp test-debug.scm test-debug-rust.scm test-debug-cpp.scm test-debug-picker.scm ~/.config/helix/cogs/
 cp -r test-debug ~/.config/helix/cogs/
 ```
-
-`test-debug.scm` is the editor half, `test-debug-rust.scm` gathers the rust
-half, and `test-debug/` holds one module per concern. The requires between
-them are relative, so the three have to land together.
+`test-debug.scm` is the editor half, the language files gather their pure
+halves, `test-debug-picker.scm` draws the test picker, and `test-debug/`
+holds one module per concern. Their relative requires mean all of them have
+to land together.
 
 Then pull the commands into global scope from `~/.config/helix/helix.scm`,
 which is what makes them dispatchable:
 
 ```scheme
 (require "cogs/test-debug.scm")
-(provide debug-here dbgh run-here test-pick debug-again debug-breakpoint)
+(provide debug-here dbgh run-here test-pick debug-again debug-output debug-breakpoint)
 ```
 
 ### With nix
 
-The flake ships a home-manager module that installs both halves, and the
-debugger template as a value you splice into your own rust language entry:
+The flake ships a home-manager module, the native Helix patch, and the
+debugger template. Apply the patch to the Steel Helix package, then splice
+the template into your own rust language entry:
 
 ```nix
+nixpkgs.overlays = [
+  (final: _prev: {
+    helix = inputs.helix-test-debug.lib.patchHelix
+      inputs.helix-steel.packages.${final.stdenv.hostPlatform.system}.default;
+  })
+];
+
 imports = [ inputs.helix-test-debug.homeManagerModules.default ];
 programs.helix.testDebug.enable = true;
 programs.helix.languages.language = [

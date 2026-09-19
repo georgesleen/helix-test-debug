@@ -44,6 +44,7 @@ pub mod inner {
         #[test]
         fn panics_with_a_clear_assertion() {
             record("inner::tests::panics_with_a_clear_assertion");
+            eprintln!("\x1b[38;2;1;2;3mCOLOUR_SENTINEL\x1b[0m");
             assert_eq!(doubled(2), 5, "doubled(2) is 4, not 5");
         }
 

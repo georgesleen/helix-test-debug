@@ -17,7 +17,6 @@
 (require (only-in "helix/static.scm"
                   get-helix-scm-path
                   get-current-line-number
-                  insert_string
                   dap_terminate
                   dap_variables
                   dap_toggle_breakpoint
@@ -129,12 +128,6 @@
 ;; Last resolved request, so it can be repeated from another buffer.
 (define *last-request* #f)
 
-;; Everything the last job printed, and what it was, so it can be read
-;; after the status line has moved on. One slot rather than a log: the run
-;; whose output is wanted is the one that just finished.
-(define *last-output* #f)
-(define *last-output-label* #f)
-
 ;; Whether the variables popup is being kept fresh. Helix builds that
 ;; popup from a snapshot and never updates it, so stepping refreshes it
 ;; here instead.
@@ -149,19 +142,6 @@
 
 (define (fail! message)
   (set-error! (string-append "test: " message)))
-
-;; Put the last job's output in a scratch buffer, and report whether there
-;; was any. A scratch buffer rather than a file: the output is worth
-;; reading, scrolling and searching, and worth nothing once the next run
-;; replaces it.
-(define (show-output!)
-  (if (and (string? *last-output*) (not (equal? (trim *last-output*) "")))
-      (begin
-        (helix.new)
-        (insert_string (output-report *last-output-label* *last-output*))
-        (helix.goto-line 1)
-        #t)
-      #f))
 
 ;; A failure that produced output opens it: the status line holds one line,
 ;; and the reason a build or a run failed is usually well above the last
@@ -602,9 +582,10 @@
        (hx.block-on-task
         (lambda ()
           (set! *job-label* #f)
-          (set! *last-output* output)
-          (set! *last-output-label* label)
-          (complete! output))))))
+          (set-output! (if (and (string? output) (not (equal? (trim output) "")))
+                           (output-report label output)
+                           ""))
+          (complete! (if (string? output) (output->text output) #f)))))))
   (keep-awake! label 1))
 
 ;; Start a session on a binary, stopped at file and line. The stop location
@@ -614,6 +595,9 @@
   (terminate-existing!)
   ;; Helix hands the adapter the breakpoints it holds when the session
   ;; starts, so a remembered set has to be in place before this, not after.
+  ;; The build output belongs to the build. A new DAP session starts its own
+  ;; output so :debug-output cannot reopen stale cargo text while it is live.
+  (set-output! "")
   (restore-breakpoints! (request-root request))
   (cond
     ;; Every remote launch is the same shape: the adapter gets the image and
@@ -1164,9 +1148,7 @@
 ;; Show what the last run printed
 (define (debug-output)
   (when (not (show-output!))
-    (status! (if (string? *last-output-label*)
-                 (string-append *last-output-label* " printed nothing")
-                 "nothing has been run yet"))))
+    (status! "no output from the last run")))
 
 ;; Rebuild the variables popup. Helix installs it under a fixed layer id,
 ;; so this replaces the stale one rather than stacking another.

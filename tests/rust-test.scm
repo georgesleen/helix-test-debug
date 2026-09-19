@@ -159,10 +159,10 @@
 ;; run-arguments: the filter goes past `--` to the test binary, pinned to
 ;; one test
 (check-equal! "run one library test"
-              '("test" "--lib" "--" "analysis::signal::tests::settles" "--exact" "--include-ignored")
+              '("test" "--color=always" "--lib" "--" "analysis::signal::tests::settles" "--exact" "--include-ignored" "--color=always")
               (run-arguments "src/analysis/signal.rs" "analysis::signal::tests::settles"))
 (check-equal! "run one integration test"
-              '("test" "--test" "skeleton" "--" "divider_op" "--exact" "--include-ignored")
+              '("test" "--color=always" "--test" "skeleton" "--" "divider_op" "--exact" "--include-ignored" "--color=always")
               (run-arguments "tests/skeleton.rs" "divider_op"))
 
 ;; path helpers

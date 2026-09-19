@@ -180,7 +180,7 @@ completion = [
   { name = "source file" },
   { name = "line" },
 ]
-args = { program = "{0}", args = [ "{1}", "--exact", "--include-ignored", "--test-threads=1", "--nocapture" ], preRunCommands = [ "breakpoint set --file {2} --line {3}" ] }
+args = { program = "{0}", args = [ "{1}", "--exact", "--include-ignored", "--test-threads=1", "--nocapture", "--color=always" ], preRunCommands = [ "breakpoint set --file {2} --line {3}" ] }
 
 [[language.debugger.templates]]
 name = "program at line"
@@ -236,7 +236,7 @@ echo $$ >"$SESSION_PID_FILE"
   # Helix needs longer than its first paint before it reads reliably: a
   # keystroke sent too early is swallowed, which showed up as the cursor
   # still being on line 1 when the command ran.
-  sleep 4
+  sleep "${START_DELAY:-4}"
   for key in "$@"; do
     printf '%s\r' "$key"
     sleep 2
@@ -442,6 +442,41 @@ fi
 kill -9 "$tracer" 2>/dev/null || true
 kill -9 "$stopped" 2>/dev/null || true
 stop_session
+
+# A failure after continuing a DAP session must open the program's output,
+# not the earlier cargo build output.
+dap_output_capture=$workdir/dap-output.txt
+rm -f "$ran_log"
+LINGER=40 DEADLINE=70 start_session "$dap_output_capture" ":$failing_line" ":debug-here" ":debug-continue"
+shown=
+waited=0
+while [[ $waited -lt 45 ]]; do
+  if squashed "$dap_output_capture" | grep -q "RUST_BACKTRACE=1" &&
+     squashed "$dap_output_capture" | grep -q '\[output\]'; then
+    shown=yes
+    break
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
+stop_session
+[[ -n $shown ]] ||
+  fail "a failing debug-here never opened its output" "$dap_output_capture"
+squashed "$dap_output_capture" | grep -q 'assertion.*failed' ||
+  fail "the DAP output lost the assertion failure" "$dap_output_capture"
+raw_colour=$(python3 - "$dap_output_capture" <<'PY'
+import pathlib
+import re
+import sys
+
+screen = pathlib.Path(sys.argv[1]).read_bytes()
+match = re.search(rb"\x1b\[38;2;1;2;3m.{0,120}COLOUR_SENTINEL", screen, re.DOTALL)
+print("yes" if match else "")
+PY
+)
+[[ -n $raw_colour ]] ||
+  fail "the DAP output did not render its RGB colour" "$dap_output_capture"
+echo "integration-check: a failing debug-here showed its assertion without being asked"
 
 # :test-pick. The overlay is driven by typing: session.sh ends every key
 # with a carriage return, so one key sends the query and accepts it. The
