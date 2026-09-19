@@ -29,15 +29,19 @@ skip() {
   exit 0
 }
 
-if ! command -v hx >/dev/null; then
-  skip "no hx on PATH"
+# HX names the editor under test, so a candidate build can be driven
+# without putting it on PATH first.
+hx=${HX:-hx}
+
+if ! command -v "$hx" >/dev/null; then
+  skip "no $hx on PATH"
 fi
 
 # The Steel build embeds its cog sources, so this string is a precise marker.
 # Stock helix has no engine and would ignore the cog, making this vacuous.
 if ! LC_ALL=C grep -aq "helix/commands.scm" \
-  "$(readlink -f "$(command -v hx)")" 2>/dev/null; then
-  skip "hx has no Steel support"
+  "$(readlink -f "$(command -v "$hx")")" 2>/dev/null; then
+  skip "$hx has no Steel support"
 fi
 
 for tool in cargo lldb-dap script setsid; do
@@ -239,16 +243,20 @@ echo $$ >"$SESSION_PID_FILE"
   sleep "${START_DELAY:-4}"
   for key in "$@"; do
     printf '%s\r' "$key"
-    sleep 2
+    # A command that has to finish before the next key means something --
+    # a session that must be live before the next launch, say -- needs
+    # longer than the default gap.
+    sleep "${KEY_DELAY:-2}"
   done
   sleep "$LINGER"
   printf ':q!\r'
   sleep 1
-} | timeout -k 5 "$DEADLINE" script -qec "hx $SOURCE_FILE" /dev/null
+} | timeout -k 5 "$DEADLINE" script -qec "$HX_BINARY $SOURCE_FILE" /dev/null
 EOF
 
 export SESSION_PID_FILE=$session_pid_file
 export SOURCE_FILE=$source_file
+export HX_BINARY=$hx
 
 start_session() {
   local capture=$1
@@ -441,6 +449,58 @@ fi
 
 kill -9 "$tracer" 2>/dev/null || true
 kill -9 "$stopped" 2>/dev/null || true
+stop_session
+
+# Starting a session while one is live must leave exactly one behind. The
+# cog ends the previous session before launching, and when that did
+# nothing -- helix only sends `terminate` to an adapter advertising
+# supportsTerminateRequest, and lldb-dap advertises `supportTerminateDebuggee`
+# instead -- the old adapter and its ptrace-stopped test binary stayed
+# alive, invisible to the editor that had forgotten them.
+second_capture=$workdir/second-session.txt
+rm -f "$ran_log"
+# KEY_DELAY so the first session is actually live when the second launch
+# is typed: at the default gap the cog is still building and refuses the
+# second command, which would make this check pass without ever putting
+# two sessions in flight.
+KEY_DELAY=25 LINGER=60 DEADLINE=160 start_session "$second_capture" \
+  ":$declaration" ":debug-here" ":$failing_line" ":debug-here"
+
+# The count means nothing until the *second* session exists, and
+# await_stopped returns on the first one it sees, so the second launch is
+# waited for by name: it debugs the failing test, the first debugs
+# $test_path.
+second_up=
+waited=0
+while [[ $waited -lt 120 ]]; do
+  if pgrep -f "$binaries.*$failing_test" >/dev/null 2>&1; then
+    second_up=yes
+    break
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
+
+if [[ -z $second_up ]]; then
+  raised=$(engine_error "$second_capture")
+  [[ -n $raised ]] && fail "the second debug-here raised: $raised" "$second_capture"
+  fail "the second debug-here never started in 120s" "$second_capture"
+fi
+
+# Give a session that is being ended time to go away before counting.
+sleep 5
+live_binaries=$(pgrep -cf "$binaries" 2>/dev/null || echo 0)
+if [[ $live_binaries -ne 1 ]]; then
+  fail "a second debug-here left $live_binaries test binaries alive, not 1:
+$(pgrep -af "$binaries" || true)" "$second_capture"
+fi
+
+echo "integration-check: a second debug-here ended the first session"
+for pid in $(pgrep -f "$binaries" 2>/dev/null || true); do
+  tracer=$(awk '$1 == "TracerPid:" { print $2 }' "/proc/$pid/status" 2>/dev/null || true)
+  [[ -n ${tracer:-} && $tracer != 0 ]] && kill -9 "$tracer" 2>/dev/null || true
+  kill -9 "$pid" 2>/dev/null || true
+done
 stop_session
 
 # :debug-failure must replay the same execution of a source line that

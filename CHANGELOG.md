@@ -18,6 +18,16 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   `georgesleen/helix` Steel fork. The flake no longer patches a Helix
   package at build time.
 
+- Ending a debug session no longer leaks its adapter and debuggee. Helix
+  only sent `terminate` to an adapter advertising `supportsTerminateRequest`
+  and otherwise just forgot the session; lldb-dap advertises
+  `supportTerminateDebuggee` instead, so every session the cog ended left an
+  adapter and a ptrace-stopped test binary running, which is also how two
+  sessions came to compete for the variables panel. Fixed in the Steel fork
+  (`disconnect` with `terminateDebuggee`), and the integration check now
+  asserts that a second `:debug-here` leaves exactly one session alive.
+- `tests/integration.sh` takes `HX` to drive a candidate editor build, and
+  `KEY_DELAY` for a case whose next keystroke must wait on the last one.
 - `:debug-failure` now counts executions of the panic line under `lldb` and
   gives the DAP breakpoint the corresponding ignore count. A failure inside
   a loop therefore stops with the failing iteration's locals instead of on
