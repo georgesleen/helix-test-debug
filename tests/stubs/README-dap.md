@@ -24,7 +24,10 @@ a launch through to `configurationDone`:
 - `setBreakpoints` — success, echoing each requested line back as
   `{"verified": true, "line": <line>}`
 - `threads` — one thread, `{"id": 1, "name": "stub"}`
-- `configurationDone`, `terminate` (plus a `terminated` event), `disconnect`
+- `configurationDone` — success, then a `stopped` event for thread 1
+- `stackTrace`, `scopes`, `variables` — one canned frame with locals, one
+  expandable struct and a register scope, used by `proxy-check.sh`
+- `terminate` (plus a `terminated` event), `disconnect`
 - anything else — a bare success, so helix never hangs on a request the stub
   does not model
 
@@ -32,12 +35,12 @@ Exits 0 on `disconnect` or on stdin EOF. It never blocks waiting for more.
 
 ## What it does not do
 
-It does not flash, does not reset or halt a core, does not execute or inspect a
-program, and reports no stack frames, variables or stop events. Nothing it
-answers is derived from a real target — `verified: true` means "recorded", not
-"planted". A passing run proves only what the **editor** sent; whether probe-rs
-accepts those arguments and whether the breakpoint actually binds on silicon
-still has to be checked against hardware.
+It does not flash, reset or halt a core, and it does not execute or inspect a
+program. The reported stop, frame and variables are fixed fixtures rather than
+target state. `verified: true` means "recorded", not "planted". A passing run
+proves only what the **editor** sent; whether probe-rs accepts those arguments
+and whether the breakpoint actually binds on silicon still has to be checked
+against hardware.
 
 ## The log
 

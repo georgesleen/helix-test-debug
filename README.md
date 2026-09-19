@@ -21,8 +21,8 @@ no test filter.
 | `:debug-breakpoints` | place this workspace's remembered breakpoints |
 | `:debug-breakpoints-clear` | forget them |
 | `:debug-doctor` | check everything it needs is in place, and say what to fix |
-| `:debug-variables` | show the variables popup and keep it fresh |
-| `:debug-step-over` `:debug-step-in` `:debug-step-out` `:debug-continue` | step, then refresh that popup |
+| `:debug-variables` | toggle the live variables split |
+| `:debug-step-over` `:debug-step-in` `:debug-step-out` `:debug-continue` | control the running debug session |
 
 A run or debug session that fails opens its output by itself: the status
 line holds one line, while a panic, failed assertion or broken build says
@@ -41,39 +41,33 @@ thread with the elapsed time on the statusline. A buffer with unsaved
 changes is written first, because cargo would otherwise compile code that
 does not match the lines the breakpoint was computed from.
 
-Helix's own variables popup is built from a snapshot taken when you open it
-and never updates, so it goes stale the moment you step. It is installed
-under a fixed layer id, which means re-running it replaces that popup in
-place, so the stepping commands here rebuild it after the adapter reports
-the new stop location. Bind them over `<space>G n i o c` to get a variables
-view that follows the program.
+The variables view is a vertical split backed by a plain text file. A small
+DAP proxy writes it on every stop, so it follows stepping without a popup
+refresh command and closes itself when the session ends. It works the same
+way with lldb-dap, probe-rs and any other stdio DAP adapter.
 
 Rust is complete. C and C++ debug the test under the cursor through CMake and
 ctest: see [C and C++](#c-and-c) below for what works and what does not yet.
 
-Requires [Helix with the Steel plugin
-system](https://github.com/mattwparas/helix/tree/steel-event-system), the
-native output patch shipped here, a DAP adapter (`lldb-dap`), and `cargo`
-or `cmake` and `ctest`.
+Requires the
+[`steel-event-system-output`](https://github.com/georgesleen/helix/tree/steel-event-system-output)
+Helix fork, a DAP adapter (`lldb-dap`), and `cargo` or `cmake` and `ctest`.
+The fork carries the Steel plugin system and the native coloured output API
+this cog uses; no package patching is required.
 
 ## Install
 
-Apply the Helix side before building that fork:
+Build and install the Helix fork above, then copy the cog into your Helix
+configuration directory:
 
 ```
-git -C /path/to/helix apply /path/to/helix-test-debug/patches/helix-output.patch
-```
-
-Copy the cog into your Helix configuration directory:
-
-```
-cp test-debug.scm test-debug-rust.scm test-debug-cpp.scm test-debug-picker.scm ~/.config/helix/cogs/
+cp test-debug.scm test-debug-rust.scm test-debug-cpp.scm test-debug-picker.scm dap-vars.scm ~/.config/helix/cogs/
 cp -r test-debug ~/.config/helix/cogs/
 ```
 `test-debug.scm` is the editor half, the language files gather their pure
-halves, `test-debug-picker.scm` draws the test picker, and `test-debug/`
-holds one module per concern. Their relative requires mean all of them have
-to land together.
+halves, `test-debug-picker.scm` draws the test picker, `dap-vars.scm` owns the
+variables split, and `test-debug/` holds one module per concern. Their
+relative requires mean all of them have to land together.
 
 Then pull the commands into global scope from `~/.config/helix/helix.scm`,
 which is what makes them dispatchable:
@@ -85,15 +79,14 @@ which is what makes them dispatchable:
 
 ### With nix
 
-The flake ships a home-manager module, the native Helix patch, and the
-debugger template. Apply the patch to the Steel Helix package, then splice
-the template into your own rust language entry:
+The flake ships a home-manager module, debugger templates and the variables
+proxy. Use the Helix fork directly, then splice the template into your own rust
+language entry:
 
 ```nix
 nixpkgs.overlays = [
   (final: _prev: {
-    helix = inputs.helix-test-debug.lib.patchHelix
-      inputs.helix-steel.packages.${final.stdenv.hostPlatform.system}.default;
+    helix = inputs.helix-steel.packages.${final.stdenv.hostPlatform.system}.default;
   })
 ];
 
@@ -120,6 +113,80 @@ so the rest of the submenu survives. In `init.scm`:
 (add-global-keybinding
  (hash "normal" (hash "space" (hash "G" (hash "d" ":debug-here")))))
 ```
+
+## Variables panel
+
+The variables panel is standalone: it needs one binary, one Steel file and a
+keybinding. It does not depend on the test-debug cog or on a Helix patch, and
+it works with any DAP adapter that speaks over stdio.
+
+1. Install the proxy. With Nix:
+
+   ```sh
+   nix profile install github:georgesleen/helix-test-debug#helix-dap-vars
+   ```
+
+   Or build `dap-vars/` with Cargo and put `helix-dap-vars` on `PATH`.
+
+2. Put the proxy in front of the adapter. An lldb-dap block changes from:
+
+   ```toml
+   [language.debugger]
+   name = "lldb-dap"
+   transport = "stdio"
+   command = "lldb-dap"
+   ```
+
+   to:
+
+   ```toml
+   [language.debugger]
+   name = "lldb-dap"
+   transport = "stdio"
+   command = "helix-dap-vars"
+   args = ["--", "lldb-dap"]
+   ```
+
+   The canonical probe-rs block changes from:
+
+   ```toml
+   [language.debugger]
+   name = "probe-rs"
+   transport = "stdio"
+   command = "probe-rs"
+   args = ["dap-server"]
+   ```
+
+   to:
+
+   ```toml
+   [language.debugger]
+   name = "probe-rs"
+   transport = "stdio"
+   command = "helix-dap-vars"
+   args = ["--", "probe-rs", "dap-server"]
+   ```
+
+   Keep the existing templates below either block unchanged. In Nix, the
+   same transformation is
+   `inputs.helix-test-debug.lib.wrapAdapter { command = "probe-rs"; args = [ "dap-server" ]; }`.
+
+3. Put `dap-vars.scm` in `~/.config/helix/cogs/`, require it from
+   `~/.config/helix/helix.scm`, and expose the command:
+
+   ```scheme
+   (require "cogs/dap-vars.scm")
+   (provide dap-variables)
+   ```
+
+4. Bind `:dap-variables` to a key. The command toggles the split; while it is
+   enabled, the first debug stop opens it without taking focus, every later
+   stop reloads it, and the session ending closes it. One discovered debug
+   session at a time is supported. A proxy started with `--out` can be paired
+   with `(dap-variables-path! "/the/same/path")`.
+
+The home-manager module installs both the binary and `dap-vars.scm` when
+`programs.helix.testDebug.enable = true`.
 
 ## The debugger template
 

@@ -1,4 +1,4 @@
-.PHONY: test compile-check helix-check integration-check hardware-check fmt check clean
+.PHONY: test compile-check proxy-check helix-check integration-check hardware-check fmt check clean
 
 CHECK_DIR = .compile-check
 
@@ -12,7 +12,7 @@ test:
 compile-check:
 	rm -rf $(CHECK_DIR)
 	mkdir -p $(CHECK_DIR)
-	cp test-debug-rust.scm test-debug-cpp.scm test-debug-picker.scm $(CHECK_DIR)/
+	cp test-debug-rust.scm test-debug-cpp.scm test-debug-picker.scm dap-vars.scm $(CHECK_DIR)/
 	cp -r test-debug $(CHECK_DIR)/
 	cp -r tests/stubs/helix $(CHECK_DIR)/helix
 	sed 's|(require-builtin helix/core/text as text.)|(require (prefix-in text. "helix/text.scm"))|' \
@@ -20,6 +20,13 @@ compile-check:
 	printf '(require "test-debug.scm")\n(displayln "editor half compiles")\n' > $(CHECK_DIR)/driver.scm
 	steel $(CHECK_DIR)/driver.scm
 	rm -rf $(CHECK_DIR)
+
+# Drive the variables proxy end to end: a scripted DAP client through
+# helix-dap-vars into the stub adapter. Skips itself when there is no rust
+# toolchain and no prebuilt binary in HELIX_DAP_VARS.
+proxy-check:
+	cd dap-vars && cargo test
+	bash tests/proxy-check.sh
 
 # Load the cog in a real Steel-enabled helix. Skips itself when one is not
 # on PATH, so CI stays green.
@@ -41,7 +48,7 @@ hardware-check:
 fmt:
 	nixfmt flake.nix
 
-check: test compile-check helix-check integration-check
+check: test compile-check proxy-check helix-check integration-check
 	nixfmt --check flake.nix
 
 clean:

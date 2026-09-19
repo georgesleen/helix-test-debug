@@ -5,6 +5,15 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
 
 ## Unreleased
 
+- `:debug-variables` is now a focus-preserving vertical split backed by a
+  plain text file. `helix-dap-vars` proxies any stdio DAP adapter, refreshes
+  locals on every stop, and removes the file when the session ends so the
+  split closes itself. The proxy and Steel module are usable without this
+  cog and are exported through the flake.
+- The native coloured-output API now lives as normal commits in the
+  `georgesleen/helix` Steel fork. The flake no longer patches a Helix
+  package at build time.
+
 - Failed runs and debug sessions open their output automatically. Helix
   now retains DAP output through session exit instead of replacing the
   status line once per event. ANSI SGR colours render as native styles in

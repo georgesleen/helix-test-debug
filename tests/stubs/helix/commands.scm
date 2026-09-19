@@ -5,10 +5,14 @@
          new
          write
          open
-         goto-line)
+         goto-line
+         vsplit
+         buffer-close)
 
 (define (debug-start template . arguments) void)
 (define (new . arguments) void)
 (define (write . arguments) void)
 (define (open . arguments) void)
 (define (goto-line line) void)
+(define (vsplit . arguments) void)
+(define (buffer-close . arguments) void)
