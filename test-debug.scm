@@ -136,12 +136,21 @@
 (define (fail! message)
   (set-error! (string-append "test: " message)))
 
+;; The output buffer holds cargo/libtest text: ANSI-coloured, not the
+;; buffer's own language. `log` gives it sensible highlighting without
+;; requiring `:lang log` by hand every time it opens.
+(define (open-output!)
+  (let ([opened (show-output!)])
+    (when opened
+      (helix.set-language "log"))
+    opened))
+
 ;; A failure that produced output opens it: the status line holds one line,
 ;; and the reason a build or a run failed is usually well above the last
 ;; one. The status is set after the buffer opens, so opening it does not
 ;; paint over the message.
 (define (fail-with-output! message)
-  (show-output!)
+  (open-output!)
   (fail! message))
 
 (define (focused-path)
@@ -822,7 +831,7 @@
             ;; A failing test is the case the output exists for: the panic
             ;; and whatever the test printed are above libtest's summary.
             [(outcome-failed? outcome)
-             (show-output!)
+             (open-output!)
              (fail! (string-append (request-filter request) ": " outcome))]
             [else (status! (string-append (request-filter request) ": " outcome))]))))]))
 
@@ -879,7 +888,7 @@
           (fail-with-output! (string-append "could not run " (request-filter request)))]
          [(panic-location output)
           (let ([location (panic-location output)])
-            (show-output!)
+            (open-output!)
             (fail! (string-append (request-filter request)
                                   " panicked at "
                                   (car location)
@@ -1139,7 +1148,7 @@
 ;;@doc
 ;; Show what the last run printed
 (define (debug-output)
-  (when (not (show-output!))
+  (when (not (open-output!))
     (status! "no output from the last run")))
 
 ;;@doc

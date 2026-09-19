@@ -7,7 +7,8 @@
          open
          goto-line
          vsplit
-         buffer-close)
+         buffer-close
+         set-language)
 
 (define (debug-start template . arguments) void)
 (define (new . arguments) void)
@@ -15,4 +16,5 @@
 (define (open . arguments) void)
 (define (goto-line line) void)
 (define (vsplit . arguments) void)
+(define (set-language . arguments) void)
 (define (buffer-close . arguments) void)

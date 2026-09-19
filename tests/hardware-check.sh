@@ -107,7 +107,7 @@ workdir=$(mktemp -d)
 config=$workdir/config
 requests=$workdir/dap-requests
 responses=$workdir/dap-responses
-variables=$workdir/dap-vars.txt
+variables=$workdir/dap-vars.log
 session_pid_file=$workdir/session.pid
 
 descendants() {

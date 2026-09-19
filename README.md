@@ -29,8 +29,9 @@ line holds one line, while a panic, failed assertion or broken build says
 why further up. ANSI colours are rendered as native buffer styles rather
 than escape codes, so cargo and libtest output keeps its normal colours.
 `:debug-output` shows the same output again after a passing run or after
-its buffer has been closed. The output is a scratch buffer, so `/` searches
-it, `:bc!` closes it, and the next run replaces it.
+its buffer has been closed. It is a scratch buffer helix rewrites in place,
+so `/` searches it, the next run replaces it, and closing it is `:bc!`:
+the rewrite leaves the buffer modified, which `:bc` alone refuses.
 
 Commands acting on a running session are prefixed `debug-`, so typing that
 prefix in the command palette reveals the whole feature.
@@ -41,7 +42,8 @@ thread with the elapsed time on the statusline. A buffer with unsaved
 changes is written first, because cargo would otherwise compile code that
 does not match the lines the breakpoint was computed from.
 
-The variables view is a vertical split backed by a plain text file. A small
+The variables view is a vertical split backed by a plain text file, written
+under `$XDG_RUNTIME_DIR` and named `.log` so helix highlights it. A small
 DAP proxy writes it on every stop, so it follows stepping without a popup
 refresh command and closes itself when the session ends. It works the same
 way with lldb-dap, probe-rs and any other stdio DAP adapter.
@@ -184,6 +186,14 @@ it works with any DAP adapter that speaks over stdio.
    stop reloads it, and the session ending closes it. One discovered debug
    session at a time is supported. A proxy started with `--out` can be paired
    with `(dap-variables-path! "/the/same/path")`.
+
+   The proxy writes `$XDG_RUNTIME_DIR/helix-dap-vars-<uid>/<pid>.log`,
+   falling back to `$TMPDIR` and then `/tmp` when there is no runtime
+   directory. The runtime directory is tmpfs on a systemd machine, so a
+   panel rewritten on every stop never reaches persistent storage, and the
+   `.log` suffix is what gives it highlighting: no language command is
+   issued, and nothing in the editor is patched. A path given to `--out`
+   is used verbatim, so name it `.log` too if you want the same.
 
 The home-manager module installs both the binary and `dap-vars.scm` when
 `programs.helix.testDebug.enable = true`.

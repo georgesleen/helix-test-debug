@@ -18,6 +18,16 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   `georgesleen/helix` Steel fork. The flake no longer patches a Helix
   package at build time.
 
+- The variables panel is written to `$XDG_RUNTIME_DIR` when there is one,
+  named `<pid>.log` rather than `<pid>.txt`, and no longer fsynced. The
+  runtime directory is tmpfs, so a panel rewritten on every stop costs no
+  disk write (3 ms per stop on btrfs, measured) and the debuggee's values
+  never reach persistent storage; the suffix is what gives the buffer log
+  highlighting, with no language command and no editor change. `TMPDIR`
+  and `/tmp` remain the fallback and are still searched.
+- Output buffers opened by a failed `:run-here` or by `:debug-output`
+  select the `log` language. A failing *debug session's* output is opened
+  by helix itself, so that buffer is unaffected.
 - Failed runs and debug sessions open their output automatically. Helix
   now retains DAP output through session exit instead of replacing the
   status line once per event. ANSI SGR colours render as native styles in

@@ -57,7 +57,7 @@ import time
 binary = os.environ["HELIX_DAP_VARS"]
 workdir = os.environ["PROXY_WORKDIR"]
 root = os.environ["REPO_ROOT"]
-out = os.path.join(workdir, "vars.txt")
+out = os.path.join(workdir, "vars.log")
 
 EXPECTED = """# dap-vars stop 1
 frame 0: kitest::run at /home/u/p/src/lib.rs:42

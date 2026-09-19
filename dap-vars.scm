@@ -35,9 +35,11 @@
 (define *tick-idle-ms* 500)
 
 ;; What the proxy leaves in the temporary directory: one directory per
-;; user, one file per proxy, named after its pid.
+;; user, one file per proxy, named after its pid. The suffix is `.log`
+;; rather than `.txt` so helix gives the panel log highlighting from its
+;; file type, which needs no language command and no patched editor.
 (define *directory-prefix* "helix-dap-vars-")
-(define *file-suffix* ".txt")
+(define *file-suffix* ".log")
 
 ;; Whether the panel is wanted at all. Everything else is derived.
 (define *enabled* #f)
@@ -134,6 +136,8 @@
     (set! *path* path)
     (set! *doc-id* (editor->doc-id (editor-focus)))
     (set! *token* (file-token path))
+    ;; The panel's language comes from its `.log` file type, so nothing
+    ;; here has to ask for one.
     ;; The panel never takes focus, on open or on refresh: it is something
     ;; to glance at while stepping, and stealing the cursor would make
     ;; stepping unusable.
@@ -214,9 +218,13 @@
         string<?))
 
 (define (session-directories)
-  (filter (lambda (entry)
-            (and (starts-with? (file-name entry) *directory-prefix*) (is-dir? entry)))
-          (entries-of (temp-root))))
+  (apply append
+         (map (lambda (root)
+                (filter (lambda (entry)
+                          (and (starts-with? (file-name entry) *directory-prefix*)
+                               (is-dir? entry)))
+                        (entries-of root)))
+              (temp-roots))))
 
 (define (entries-of directory)
   (if (path-exists? directory)
@@ -225,12 +233,19 @@
         (if (list? entries) entries '()))
       '()))
 
-(define (temp-root)
+(define (environment-directory name)
   (let ([configured (call-with-exception-handler (lambda (failure) #f)
-                                                 (lambda () (env-var "TMPDIR")))])
-    (if (and (string? configured) (not (equal? configured "")))
-        configured
-        "/tmp")))
+                                                 (lambda () (env-var name)))])
+    (if (and (string? configured) (not (equal? configured ""))) configured #f)))
+
+;; Where the proxy may have left its file, best first. XDG_RUNTIME_DIR is
+;; tmpfs on a systemd machine, so the proxy prefers it: a panel rewritten
+;; on every stop has no business reaching persistent storage. A proxy on a
+;; machine without one still writes under TMPDIR, so both are searched.
+(define (temp-roots)
+  (filter string?
+          (list (environment-directory "XDG_RUNTIME_DIR")
+                (or (environment-directory "TMPDIR") "/tmp"))))
 
 ;; A proxy killed with SIGKILL -- which is how helix ends an adapter --
 ;; cannot delete its own file, so a stale one can outlive its session. The
