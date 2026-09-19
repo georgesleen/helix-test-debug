@@ -479,8 +479,12 @@ configuration error.
 Drives `:debug-here` on an actual board, through an actual adapter, in an
 actual helix, and then reads the DAP exchange back: the image the file API
 named was flashed, the breakpoint bound at an address, the core stopped at
-that address, and target memory was readable. It skips itself without
-hardware, so it is outside `make check`.
+that address, and target memory was readable. The adapter is driven through
+`helix-dap-vars`, the same proxy the Home Manager module wires up, so the
+check also asserts the variables panel the session actually wrote: a
+completed stop, frame 0 naming the frame the adapter reported, and at least
+one of the target's readable variables rendered in it. It skips itself
+without hardware, so it is outside `make check`.
 
 It knows nothing about any board. The project, chip, adapter and line are
 inputs, so another target needs no code here:

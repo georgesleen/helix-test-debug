@@ -10,6 +10,10 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   locals on every stop, and removes the file when the session ends so the
   split closes itself. The proxy and Steel module are usable without this
   cog and are exported through the flake.
+- `make hardware-check` drives the adapter through `helix-dap-vars` and
+  asserts the panel the real session wrote on a real target: a completed
+  stop, frame 0 matching the frame the adapter reported, and one of the
+  target's readable variables rendered in it.
 - The native coloured-output API now lives as normal commits in the
   `georgesleen/helix` Steel fork. The flake no longer patches a Helix
   package at build time.

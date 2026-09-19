@@ -10,6 +10,7 @@ evidence rather than a tautology.
 import glob
 import json
 import os
+import re
 import sys
 
 
@@ -110,7 +111,7 @@ def executables(build, source):
 
 
 def main():
-    requests_path, responses_path, build, source_file, line = sys.argv[1:6]
+    requests_path, responses_path, build, source_file, line, snapshot_path = sys.argv[1:7]
     line = int(line)
     source = os.path.relpath(source_file, os.path.dirname(build.rstrip("/")))
 
@@ -192,7 +193,34 @@ def main():
     if not readable:
         fail("no variable was readable from the target")
 
-    print("hardware-check: %s %s, bound %s:%d at %s, stopped in %s at line %s, read %s"
+    # The panel the editor showed is the proxy's file, so this asserts what
+    # was on screen and not merely what the adapter answered. Its frame has
+    # to be one the adapter actually reported, and at least one variable
+    # the target gave up has to be rendered in it.
+    try:
+        snapshot = open(snapshot_path, encoding="utf-8").read()
+    except OSError as error:
+        fail("the variables panel wrote no readable file: %s" % error)
+    if "# dap-vars stop " not in snapshot:
+        fail("the variables panel holds no stop: %r" % snapshot[:200])
+    shown = re.search(r"^frame 0: (.*?)(?: at [^\n]*)?$", snapshot, re.MULTILINE)
+    if not shown:
+        fail("the variables panel names no frame: %r" % snapshot[:200])
+    reported_frames = {frame.get("name") for frame in frames}
+    if shown.group(1) not in reported_frames:
+        fail("the panel shows frame %r, which the adapter never reported: %r"
+             % (shown.group(1), sorted(n for n in reported_frames if n)))
+    panelled = [
+        variable["name"]
+        for variable in readable
+        if re.search(r"^\s+%s(: [^=\n]*)? = " % re.escape(variable["name"]),
+                     snapshot, re.MULTILINE)
+    ]
+    if not panelled:
+        fail("the panel shows none of the target's variables: %r" % snapshot[:400])
+
+    print("hardware-check: %s %s, bound %s:%d at %s, stopped in %s at line %s, "
+          "read %s, panel showed frame %s with %s"
           % (starts[-1].get("command"),
              os.path.basename(named),
              os.path.basename(source_file),
@@ -200,7 +228,9 @@ def main():
              address,
              here[-1].get("name"),
              reported,
-             ", ".join("%s = %s" % (v["name"], v["value"]) for v in readable[:2])))
+             ", ".join("%s = %s" % (v["name"], v["value"]) for v in readable[:2]),
+             shown.group(1),
+             ", ".join(panelled[:3])))
 
 
 if __name__ == "__main__":

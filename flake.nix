@@ -259,6 +259,9 @@
               # The DAP adapter for an embedded target, and the one the
               # hardware check drives by default.
               probe-rs-tools
+              # The hardware check drives the adapter through the same proxy
+              # as the Home Manager module and verifies its panel snapshot.
+              self.packages.${system}.helix-dap-vars
               # tests/pico-sdk-fixture builds against these. picotool is
               # here so the SDK finds an install of exactly its version
               # rather than fetching and building one, which is the only
