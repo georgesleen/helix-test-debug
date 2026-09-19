@@ -7,14 +7,44 @@
     { self, nixpkgs }:
     let
       forAllSystems = nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed;
+      mkHelixDapVars =
+        pkgs:
+        pkgs.rustPlatform.buildRustPackage {
+          pname = "helix-dap-vars";
+          version = "0.1.0";
+          src = ./dap-vars;
+          cargoLock.lockFile = ./dap-vars/Cargo.lock;
+        };
     in
     {
-      lib.helixOutputPatch = ./patches/helix-output.patch;
-      lib.patchHelix =
-        package:
-        package.overrideAttrs (old: {
-          patches = (old.patches or [ ]) ++ [ ./patches/helix-output.patch ];
-        });
+      packages = forAllSystems (
+        system:
+        let
+          package = mkHelixDapVars nixpkgs.legacyPackages.${system};
+        in
+        {
+          helix-dap-vars = package;
+          default = package;
+        }
+      );
+
+      overlays.default = final: _prev: {
+        helix-dap-vars = mkHelixDapVars final;
+      };
+
+      lib.wrapAdapter =
+        {
+          command,
+          args ? [ ],
+        }:
+        {
+          command = "helix-dap-vars";
+          args = [
+            "--"
+            command
+          ]
+          ++ args;
+        };
 
       # The debugger templates the cog drives. Splice them into the templates
       # list of your own language entry; a second [[language]] entry for the
@@ -179,11 +209,18 @@
       # because helix.scm is where your own commands live and a module
       # cannot own that file without clobbering them.
       homeManagerModules.default =
-        { config, lib, ... }:
+        {
+          config,
+          lib,
+          pkgs,
+          ...
+        }:
         {
           options.programs.helix.testDebug.enable = lib.mkEnableOption "the helix-test-debug cog";
 
           config = lib.mkIf config.programs.helix.testDebug.enable {
+            home.packages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.helix-dap-vars ];
+            xdg.configFile."helix/cogs/dap-vars.scm".source = "${self}/dap-vars.scm";
             xdg.configFile."helix/cogs/test-debug.scm".source = "${self}/test-debug.scm";
             xdg.configFile."helix/cogs/test-debug-rust.scm".source = "${self}/test-debug-rust.scm";
             xdg.configFile."helix/cogs/test-debug-cpp.scm".source = "${self}/test-debug-cpp.scm";
@@ -205,6 +242,8 @@
             packages = with pkgs; [
               gnumake
               nixfmt
+              cargo
+              rustc
               # Also provides steel-language-server, which is the tooling
               # this code has: there is no Scheme formatter here on purpose,
               # see README.md.
@@ -259,6 +298,20 @@
                 cp -r ${self} source
                 chmod -R u+w source
                 make -C source compile-check | tee $out
+              '';
+          proxy =
+            pkgs.runCommand "helix-dap-vars-proxy-check"
+              {
+                nativeBuildInputs = [
+                  pkgs.python3
+                  self.packages.${system}.helix-dap-vars
+                ];
+              }
+              ''
+                cp -r ${self} source
+                chmod -R u+w source
+                HELIX_DAP_VARS=${self.packages.${system}.helix-dap-vars}/bin/helix-dap-vars \
+                  bash source/tests/proxy-check.sh | tee $out
               '';
 
           format = pkgs.runCommand "helix-test-debug-format" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''

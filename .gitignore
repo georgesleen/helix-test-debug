@@ -5,3 +5,4 @@ result-*
 tests/fixture/target/
 tests/fixture/.helix/
 __pycache__/
+dap-vars/target/

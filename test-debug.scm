@@ -18,7 +18,6 @@
                   get-helix-scm-path
                   get-current-line-number
                   dap_terminate
-                  dap_variables
                   dap_toggle_breakpoint
                   dap_next
                   dap_step_in
@@ -29,6 +28,9 @@
 (require-builtin steel/strings)
 (require-builtin steel/filesystem)
 (require (only-in "test-debug-picker.scm" pick-test!))
+;; The variables panel. Standalone on purpose: it works with any adapter
+;; and needs nothing from this cog, so it is usable without it.
+(require (only-in "dap-vars.scm" dap-variables))
 (require "test-debug-rust.scm")
 (require (only-in "test-debug-cpp.scm"
                   test-macros
@@ -127,15 +129,6 @@
 
 ;; Last resolved request, so it can be repeated from another buffer.
 (define *last-request* #f)
-
-;; Whether the variables popup is being kept fresh. Helix builds that
-;; popup from a snapshot and never updates it, so stepping refreshes it
-;; here instead.
-(define *watching-variables* #f)
-
-;; How long the adapter is given to report the new stop location before the
-;; popup is rebuilt.
-(define *refresh-delay-ms* 120)
 
 (define (status! message)
   (set-status! (string-append "test: " message)))
@@ -1149,46 +1142,30 @@
   (when (not (show-output!))
     (status! "no output from the last run")))
 
-;; Rebuild the variables popup. Helix installs it under a fixed layer id,
-;; so this replaces the stale one rather than stacking another.
-(define (refresh-variables!)
-  (when *watching-variables*
-    (enqueue-thread-local-callback-with-delay *refresh-delay-ms* dap_variables)))
-
-;; Step, then rebuild the popup once the adapter has reported the new stop
-;; location.
-(define (step-then-refresh! step!)
-  (step!)
-  (refresh-variables!))
-
 ;;@doc
-;; Show variables and refresh after stepping
+;; Toggle the live variables split
 (define (debug-variables)
-  (set! *watching-variables* (not *watching-variables*))
-  (dap_variables)
-  (status! (if *watching-variables*
-               "variables follow each step"
-               "variables no longer refresh")))
+  (dap-variables))
 
 ;;@doc
-;; Step over and refresh variables
+;; Step over
 (define (debug-step-over)
-  (step-then-refresh! dap_next))
+  (dap_next))
 
 ;;@doc
-;; Step in and refresh variables
+;; Step in
 (define (debug-step-in)
-  (step-then-refresh! dap_step_in))
+  (dap_step_in))
 
 ;;@doc
-;; Step out and refresh variables
+;; Step out
 (define (debug-step-out)
-  (step-then-refresh! dap_step_out))
+  (dap_step_out))
 
 ;;@doc
-;; Continue and refresh variables
+;; Continue
 (define (debug-continue)
-  (step-then-refresh! dap_continue))
+  (dap_continue))
 
 ;; Where a workspace's breakpoints live. Helix already keeps per-workspace
 ;; configuration in .helix/, so this sits beside it rather than inventing a
