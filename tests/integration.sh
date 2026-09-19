@@ -506,28 +506,37 @@ stop_session
 # in the next one, which is the whole point of storing it. Asserting the
 # store alone would pass even if nothing was ever placed in helix, so the
 # evidence is what helix sent the debugger: the wrapped adapter's log.
+#
+# Two lines are toggled, because the second write is the one that used to
+# fail: steel's call-with-output-file refuses a path that already exists,
+# so a workspace could record one breakpoint and nothing after it. The
+# statusline is no evidence here -- helix redraws it with cursor jumps
+# inside a word -- so the store itself is read.
 rm -rf "$fixture/.helix"
 breakpoint_line=$((declaration + 2))
+rewritten_line=$((declaration + 1))
 bp_capture=$workdir/breakpoint.txt
-LINGER=10 DEADLINE=40 start_session "$bp_capture" ":$breakpoint_line" ":debug-breakpoint"
+LINGER=10 DEADLINE=60 start_session "$bp_capture" \
+  ":$breakpoint_line" ":debug-breakpoint" \
+  ":$rewritten_line" ":debug-breakpoint"
 
 waited=0
-while [[ ! -s $breakpoint_store ]]; do
+stored_lines() { sort "$breakpoint_store" 2>/dev/null | tr '\n' ' ' | sed 's/ *$//'; }
+until [[ $(stored_lines) == "src/lib.rs:$rewritten_line src/lib.rs:$breakpoint_line" ]]; do
   sleep 1
   waited=$((waited + 1))
-  if [[ $waited -gt 30 ]]; then
+  if [[ $waited -gt 40 ]]; then
     stop_session
-    fail "debug-breakpoint wrote no store in 30s" "$bp_capture"
+    fail "the store holds [$(stored_lines)], not both lines" "$bp_capture"
   fi
 done
 stop_session
 
-stored=$(cat "$breakpoint_store")
-if [[ $stored != "src/lib.rs:$breakpoint_line" ]]; then
-  fail "the store holds \"$stored\", not src/lib.rs:$breakpoint_line" "$bp_capture"
-fi
+echo "integration-check: debug-breakpoint remembered both lines, rewriting its store"
 
-echo "integration-check: debug-breakpoint remembered $stored"
+# Back to one breakpoint for the restore below, so it has a single line to
+# account for.
+printf 'src/lib.rs:%d\n' "$breakpoint_line" >"$breakpoint_store"
 
 # A fresh editor: nothing is toggled by hand, so a breakpoint reaching the
 # adapter can only have come from the store.

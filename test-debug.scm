@@ -391,8 +391,7 @@
      (let loop ([directory build]
                 [segments '(".cmake" "api" "v1" "query")])
        (if (empty? segments)
-           (call-with-output-file (join-path directory "codemodel-v2")
-                                  (lambda (port) (display "" port)))
+           (write-file! (join-path directory "codemodel-v2") "")
            (let ([next (join-path directory (car segments))])
              (when (not (path-exists? next))
                (create-directory! next))
@@ -1234,9 +1233,7 @@
            [budget (stored-budget root)])
        (when (not (path-exists? directory))
          (create-directory! directory))
-       (call-with-output-file (breakpoint-store root)
-                              (lambda (port)
-                                (display (breakpoints->text breakpoints budget) port)))
+       (write-file! (breakpoint-store root) (breakpoints->text breakpoints budget))
        #t))))
 
 (define (breakpoint-count-message count)
@@ -1374,6 +1371,16 @@
       (call-with-exception-handler (lambda (failure) #f)
                                    (lambda () (call-with-input-file path read-port-to-string)))
       #f))
+
+;; Write a file, replacing what is there. Steel's call-with-output-file
+;; refuses an existing path -- since 0.8.3 it opens with create_new and
+;; raises EEXIST -- and the #:exists keyword that would override that does
+;; not exist in 0.8.2, so the portable way to rewrite a file is to remove
+;; it first.
+(define (write-file! path text)
+  (when (path-exists? path)
+    (delete-file! path))
+  (call-with-output-file path (lambda (port) (display text port))))
 
 ;; helix.scm sits in the configuration directory, so languages.toml is its
 ;; sibling. There is no accessor for the directory itself.

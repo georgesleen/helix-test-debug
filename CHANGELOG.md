@@ -10,6 +10,12 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   status line once per event. ANSI SGR colours render as native styles in
   a searchable scratch buffer, with no escape codes in its text.
   `:debug-output` reopens the most recent run or session.
+- Breakpoints can be toggled more than once in a workspace. Steel's
+  `call-with-output-file` opens with `create_new` since 0.8.3, so every
+  write after the one that created `.helix/test-debug-breakpoints` raised
+  `File exists` and the toggle reported that it could not write. Files are
+  now replaced rather than created, which the same fix applies to the CMake
+  file API query.
 - Background commands no longer paint over the editor. Cargo reports
   progress on stderr, which was inherited from Helix and drew `Finished
   ...` and `Running unittests ...` across the TUI; stdin, stdout and
