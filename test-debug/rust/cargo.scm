@@ -10,10 +10,13 @@
 
 (provide build-arguments
          executable-from-cargo-output
+         failure-hit-count
+         lldb-hit-count-arguments
          outcome-failed?
          panic-location
          run-arguments
          target-arguments
+         test-binary-arguments
          test-outcome)
 
 ;; tests/foo.rs and tests/foo/main.rs are both target foo.
@@ -53,6 +56,54 @@
           (list "--" filter)
           *filter-flags*
           (list "--color=always")))
+
+;; The arguments the debugger template gives the built test binary. Kept
+;; separate from cargo's own arguments because the hit-count pass launches
+;; the binary directly under lldb and must replay the same test.
+(define (test-binary-arguments filter)
+  (append (list filter)
+          *filter-flags*
+          '("--test-threads=1" "--nocapture")))
+
+;; Run a built binary under lldb, auto-continuing through every execution of
+;; the eventual panic line, then print the breakpoint's per-location hit
+;; counts. Location 1.1 is the first instruction lldb associates with the
+;; source line and therefore the one an ordinary line breakpoint stops at.
+(define (lldb-hit-count-arguments binary file line program-arguments)
+  (append
+   (list "--batch"
+         "-o"
+         (string-append "breakpoint set --file \""
+                        file
+                        "\" --line "
+                        (number->string line)
+                        " --auto-continue true")
+         "-o"
+         "run"
+         "-o"
+         "breakpoint list 1"
+         "--"
+         binary)
+   program-arguments))
+
+;; How often lldb's first location on the panic line was executed, or #f.
+;; The aggregate count is unusable: one source expression may compile to
+;; several locations that are all hit during one iteration.
+(define (failure-hit-count output)
+  (let loop ([lines (source-lines output)])
+    (if (empty? lines)
+        #f
+        (let* ([line (trim (car lines))]
+               [tail (if (starts-with? line "1.1:")
+                         (text-after line "hit count = ")
+                         #f)]
+               [number (if tail
+                           (string->number
+                            (identifier-prefix-until (trim tail) #\space))
+                           #f)])
+          (if (and (integer? number) (> number 0))
+              number
+              (loop (cdr lines)))))))
 
 (define (parse-json-line line)
   (let ([text (trim line)])

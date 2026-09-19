@@ -70,11 +70,14 @@
          enclosing-modules
          executable-from-cargo-output
          function-name
+         failure-hit-count
+         lldb-hit-count-arguments
          module-prefix
          outcome-failed?
          panic-location
          qualified-test-name
          run-arguments
+         test-binary-arguments
          strip-rust-extension
          target-arguments
          test-at-line

@@ -49,6 +49,15 @@ pub mod inner {
         }
 
         #[test]
+        fn panics_after_repeated_line() {
+            record("inner::tests::panics_after_repeated_line");
+            let values = [10, 20, 30];
+            for index in 0..=values.len() {
+                let _value = values[index];
+            }
+        }
+
+        #[test]
         #[ignore]
         fn ignored_by_default() {
             record("inner::tests::ignored_by_default");

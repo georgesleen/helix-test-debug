@@ -589,10 +589,21 @@
           (complete! (if (string? output) (output->text output) #f)))))))
   (keep-awake! label 1))
 
+;; The debugger template splices this into lldb's `breakpoint set` command.
+;; An ignore count keeps the existing four-field template compatible while
+;; letting debug-failure replay the exact hit that panicked.
+(define (breakpoint-line-argument line ignore-count)
+  (if (> ignore-count 0)
+      (string-append (number->string line)
+                     " --ignore-count "
+                     (number->string ignore-count))
+      (number->string line)))
+
 ;; Start a session on a binary, stopped at file and line. The stop location
 ;; is a parameter because debugging a failure stops where it panicked, not
-;; where the test began.
-(define (launch! request binary file line)
+;; where the test began. `ignore-count` skips earlier executions of that
+;; line when a deterministic failure is replayed.
+(define (launch! request binary file line [ignore-count 0])
   (terminate-existing!)
   ;; Helix hands the adapter the breakpoints it holds when the session
   ;; starts, so a remembered set has to be in place before this, not after.
@@ -600,37 +611,37 @@
   ;; output so :debug-output cannot reopen stale cargo text while it is live.
   (set-output! "")
   (restore-breakpoints! (request-root request))
-  (cond
-    ;; Every remote launch is the same shape: the adapter gets the image and
-    ;; the chip, and the breakpoint goes through helix because a flashing
-    ;; adapter takes none in its launch request.
-    [(remote-kind? (request-get request 'kind))
-     (place-breakpoint! (firmware-source request) line)
-     (helix.debug-start *firmware-template* binary (request-get request 'chip))]
-    ;; A Unity program runs every test in its folder and takes no filter,
-    ;; so the breakpoint is what isolates the one under the cursor. Same
-    ;; template as a rust binary, for the same reason.
-    [(equal? (request-get request 'kind) 'unity)
-     (helix.debug-start *program-template* binary file (number->string line))]
-    [(equal? (request-get request 'language) 'cpp)
-     (helix.debug-start *binary-template*
-                        binary
-                        (car (request-get request 'arguments))
-                        file
-                        (number->string line))]
-    ;; A binary takes no filter, so it needs a template of its own: a
-    ;; template's arguments are positional and cannot be left out.
-    [(equal? (request-get request 'kind) 'binary)
-     (helix.debug-start *program-template* binary file (number->string line))]
-    ;; probe-rs takes no breakpoint in its launch request and drops the key
-    ;; silently, so the breakpoint is placed in helix and helix delivers it
-    ;; over setBreakpoints once the adapter is initialised.
-    [else
-     (helix.debug-start *cargo-template*
-                        binary
-                        (request-filter request)
-                        file
-                        (number->string line))])
+  (let ([line-argument (breakpoint-line-argument line ignore-count)])
+    (cond
+      ;; Every remote launch is the same shape: the adapter gets the image
+      ;; and the chip, and the breakpoint goes through helix because a
+      ;; flashing adapter takes none in its launch request.
+      [(remote-kind? (request-get request 'kind))
+       (place-breakpoint! (firmware-source request) line)
+       (helix.debug-start *firmware-template* binary (request-get request 'chip))]
+      ;; A Unity program runs every test in its folder and takes no filter,
+      ;; so the breakpoint is what isolates the one under the cursor. Same
+      ;; template as a rust binary, for the same reason.
+      [(equal? (request-get request 'kind) 'unity)
+       (helix.debug-start *program-template* binary file line-argument)]
+      [(equal? (request-get request 'language) 'cpp)
+       (helix.debug-start *binary-template*
+                          binary
+                          (car (request-get request 'arguments))
+                          file
+                          line-argument)]
+      ;; A binary takes no filter, so it needs a template of its own: a
+      ;; template's arguments are positional and cannot be left out.
+      [(equal? (request-get request 'kind) 'binary)
+       (helix.debug-start *program-template* binary file line-argument)]
+      ;; probe-rs takes no breakpoint in its launch request and drops unknown
+      ;; keys, so the breakpoint is placed in helix and helix delivers it.
+      [else
+       (helix.debug-start *cargo-template*
+                          binary
+                          (request-filter request)
+                          file
+                          line-argument)]))
   (status! (string-append (request-filter request)
                           " at "
                           file
@@ -1075,6 +1086,35 @@
                    (pick-test! entries
                                (lambda (entry) (debug-discovered! root entry)))))))])))
 
+;; Replay a known failure once under lldb with an auto-continuing source
+;; breakpoint. Its first location's hit count is how many executions must
+;; be reproduced before the real DAP session stops. This is deliberately a
+;; separate pass: a plain cargo run can report the panic line but cannot say
+;; which execution of a loop reached it.
+(define (launch-failure! request binary location)
+  (let ([file (base-name (car location))]
+        [line (car (cdr location))]
+        [program-arguments
+         (if (equal? (request-get request 'kind) 'binary)
+             '()
+             (test-binary-arguments (request-filter request)))])
+    (if (not (which "lldb"))
+        (fail! "debug-failure needs lldb on PATH to replay the failing hit")
+        (start-job!
+         (string-append "finding the failing hit for " (request-filter request))
+         "lldb"
+         (request-root request)
+         (lldb-hit-count-arguments binary file line program-arguments)
+         (lambda (output)
+           (let ([hits (if (string? output) (failure-hit-count output) #f)])
+             (if hits
+                 (launch! request binary file line (- hits 1))
+                 (fail-with-output!
+                  (string-append "lldb could not count executions of "
+                                 file
+                                 ":"
+                                 (number->string line))))))))))
+
 ;; Run the test, and when it fails debug it stopped where it panicked. The
 ;; panic path is reduced to a base name because that is what the adapter
 ;; resolves against the binary's debug info. Rust only: it reads libtest's
@@ -1102,10 +1142,7 @@
             [else
              (build-then! request
                           (lambda (binary)
-                            (launch! request
-                                     binary
-                                     (base-name (car location))
-                                     (car (cdr location)))))]))))]
+                            (launch-failure! request binary location)))]))))]
     [else
      (start-job!
       (string-append "running " (request-filter request))
@@ -1126,10 +1163,7 @@
             [else
              (build-then! request
                           (lambda (binary)
-                            (launch! request
-                                     binary
-                                     (base-name (car location))
-                                     (car (cdr location)))))]))))]))
+                            (launch-failure! request binary location)))]))))]))
 
 ;;@doc
 ;; Debug a failing test at its panic

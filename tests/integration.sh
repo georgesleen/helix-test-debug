@@ -443,6 +443,33 @@ kill -9 "$tracer" 2>/dev/null || true
 kill -9 "$stopped" 2>/dev/null || true
 stop_session
 
+# :debug-failure must replay the same execution of a source line that
+# panicked, not stop on its first trip through a loop. The fixture reaches
+# its bounds-check line four times; the launch command therefore has to
+# ignore the first three breakpoint hits.
+replay_test=panics_after_repeated_line
+replay_declaration=$(grep -n "fn ${replay_test}()" "$source_file" | cut -d: -f1)
+replay_failure_line=$(grep -nF "let _value = values[index];" "$source_file" | cut -d: -f1)
+[[ -n $replay_declaration && -n $replay_failure_line ]] ||
+  fail "cannot find the repeated-line failure fixture"
+
+replay_capture=$workdir/debug-failure-replay.txt
+: >"$adapter_log"
+rm -f "$ran_log"
+LINGER=90 DEADLINE=120 start_session \
+  "$replay_capture" ":$replay_declaration" ":debug-failure"
+await_stopped "$replay_capture" debug-failure
+
+expected_replay="breakpoint set --file lib.rs --line $replay_failure_line --ignore-count 3"
+grep -Fq "$expected_replay" "$adapter_log" ||
+  fail "debug-failure did not skip to the fourth execution: expected $expected_replay" \
+    "$replay_capture" "$adapter_log"
+
+echo "integration-check: debug-failure replayed the fourth hit at index 3"
+kill -9 "$tracer" 2>/dev/null || true
+kill -9 "$stopped" 2>/dev/null || true
+stop_session
+
 # A failure after continuing a DAP session must open the program's output,
 # not the earlier cargo build output.
 dap_output_capture=$workdir/dap-output.txt

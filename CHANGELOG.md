@@ -18,6 +18,10 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   `georgesleen/helix` Steel fork. The flake no longer patches a Helix
   package at build time.
 
+- `:debug-failure` now counts executions of the panic line under `lldb` and
+  gives the DAP breakpoint the corresponding ignore count. A failure inside
+  a loop therefore stops with the failing iteration's locals instead of on
+  the line's first execution.
 - The variables panel is written to `$XDG_RUNTIME_DIR` when there is one,
   named `<pid>.log` rather than `<pid>.txt`, and no longer fsynced. The
   runtime directory is tmpfs, so a panel rewritten on every stop costs no

@@ -165,6 +165,48 @@
               '("test" "--color=always" "--test" "skeleton" "--" "divider_op" "--exact" "--include-ignored" "--color=always")
               (run-arguments "tests/skeleton.rs" "divider_op"))
 
+;; A failure replay launches the built test binary directly under lldb with
+;; the same libtest arguments as the DAP template. The first pass
+;; auto-continues the panic line so lldb can report its hit count.
+(check-equal! "test binary arguments match the debugger template"
+              '("analysis::signal::tests::settles"
+                "--exact"
+                "--include-ignored"
+                "--test-threads=1"
+                "--nocapture")
+              (test-binary-arguments "analysis::signal::tests::settles"))
+(check-equal! "lldb counts every execution of the panic line"
+              '("--batch"
+                "-o"
+                "breakpoint set --file \"signal.rs\" --line 74 --auto-continue true"
+                "-o"
+                "run"
+                "-o"
+                "breakpoint list 1"
+                "--"
+                "/w/target/debug/deps/kitest"
+                "analysis::signal::tests::settles"
+                "--exact"
+                "--include-ignored"
+                "--test-threads=1"
+                "--nocapture")
+              (lldb-hit-count-arguments
+               "/w/target/debug/deps/kitest"
+               "signal.rs"
+               74
+               (test-binary-arguments "analysis::signal::tests::settles")))
+
+(define lldb-hit-count-output
+  (string-append
+   "1: file = 'signal.rs', line = 74, locations = 3, hit count = 10\n"
+   "  1.1: where = kitest`settles + 10 at signal.rs:74:9, resolved, hit count = 8 \n"
+   "  1.2: where = kitest`settles + 20 at signal.rs:74:12, resolved, hit count = 1\n"))
+(check-equal! "the first location count wins over the aggregate"
+              8
+              (failure-hit-count lldb-hit-count-output))
+(check-false! "lldb output without a resolved first location has no count"
+              (failure-hit-count "Breakpoint 1: no locations (pending).\n"))
+
 ;; path helpers
 (check-equal! "parent of a nested file" "/home/g/crate/src" (parent-directory "/home/g/crate/src/lib.rs"))
 (check-equal! "parent of a root file" "" (parent-directory "lib.rs"))

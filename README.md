@@ -12,7 +12,7 @@ no test filter.
 | --- | --- |
 | `:debug-here`, `:dbgh` | debug the line under the cursor: its test, or the crate's binary when the line is not in a test |
 | `:run-here` | run it without a debugger and report the result |
-| `:debug-failure` | run it, and if it fails debug it stopped where it panicked |
+| `:debug-failure` | run it, and if it fails replay it stopped on the execution that panicked |
 | `:test-pick` | pick a test from anywhere in the project and debug it |
 | `:debug-again` | repeat the last one from any buffer |
 | `:debug-cancel` | stop waiting on a build in flight |
@@ -42,6 +42,13 @@ thread with the elapsed time on the statusline. A buffer with unsaved
 changes is written first, because cargo would otherwise compile code that
 does not match the lines the breakpoint was computed from.
 
+`:debug-failure` first learns the panic line, then uses `lldb` to count how
+many times that line executes before the failure. The DAP launch ignores the
+earlier hits and stops on that same execution, so a panic inside a loop shows
+the locals from the failing iteration rather than the first iteration. Like
+any replay debugger, this assumes the test follows the same control flow on
+each run.
+
 The variables view is a vertical split backed by a plain text file, written
 under `$XDG_RUNTIME_DIR` and named `.log` so helix highlights it. A small
 DAP proxy writes it on every stop, so it follows stepping without a popup
@@ -54,8 +61,9 @@ ctest: see [C and C++](#c-and-c) below for what works and what does not yet.
 Requires the
 [`steel-event-system-output`](https://github.com/georgesleen/helix/tree/steel-event-system-output)
 Helix fork, a DAP adapter (`lldb-dap`), and `cargo` or `cmake` and `ctest`.
-The fork carries the Steel plugin system and the native coloured output API
-this cog uses; no package patching is required.
+`:debug-failure` additionally needs the matching `lldb` CLI on `PATH` for
+its hit-count replay. The fork carries the Steel plugin system and native
+coloured-output API this cog uses; no package patching is required.
 
 ## Install
 
