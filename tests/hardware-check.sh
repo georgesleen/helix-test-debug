@@ -107,6 +107,7 @@ workdir=$(mktemp -d)
 config=$workdir/config
 requests=$workdir/dap-requests
 responses=$workdir/dap-responses
+variables=$workdir/dap-vars.txt
 session_pid_file=$workdir/session.pid
 
 descendants() {
@@ -175,19 +176,21 @@ fi
 
 mkdir -p "$config/helix/cogs"
 cp "$root/test-debug.scm" "$root/test-debug-rust.scm" "$root/test-debug-cpp.scm" \
-  "$root/test-debug-picker.scm" "$config/helix/cogs/"
+  "$root/test-debug-picker.scm" "$root/dap-vars.scm" "$config/helix/cogs/"
 cp -r "$root/test-debug" "$config/helix/cogs/"
-cat >"$config/helix/helix.scm" <<'EOF'
+cat >"$config/helix/helix.scm" <<EOF
 (require "cogs/test-debug.scm")
+(require (only-in "cogs/dap-vars.scm" dap-variables-path!))
+(dap-variables-path! "$variables")
 (provide debug-here debug-continue debug-variables)
 EOF
 # This Steel build loads helix.scm only once init.scm exists. Without it the
 # commands are simply absent, which reads as a cog error and is not one.
 : >"$config/helix/init.scm"
 
-# The adapter is driven through tee so the DAP exchange can be read back.
-# The breakpoint never appears in the launch: probe-rs takes none, so helix
-# sends it separately, which is the ordering this check exists to prove.
+# The proxy drives this tee'd backend so the exchange includes the requests
+# it injects to collect the panel snapshot. Keeping the tee behind the proxy
+# also leaves its Helix-facing stream unmodified.
 cat >"$workdir/adapter.sh" <<EOF
 #!/usr/bin/env bash
 tee "$requests" | $adapter "\$@" | tee "$responses"
@@ -207,7 +210,8 @@ name = "c"
 [language.debugger]
 name = "hardware-check-adapter"
 transport = "stdio"
-command = "$workdir/adapter.sh"
+command = "${HELIX_DAP_VARS:-helix-dap-vars}"
+args = ["--out", "$variables", "--", "$workdir/adapter.sh"]
 
 [[language.debugger.templates]]
 name = "firmware"
@@ -286,23 +290,29 @@ while ! grep -aqE '"reason": *"breakpoint"' "$responses" 2>/dev/null; do
   fi
 done
 
-# Then wait for the session to have asked for variables, rather than for a
-# fixed few seconds. With an attach the first breakpoint stop arrives
-# almost immediately, long before the session has sent :debug-variables,
-# and killing the editor on a timer cut it off -- which read as the target
-# having nothing readable on it.
+# Then wait for the panel itself to be on screen, rather than for a fixed
+# few seconds. Waiting on a `variables` request no longer says anything
+# about the session: the proxy issues those itself on every stop, long
+# before :debug-variables runs, and killing the editor on that would cut
+# the panel off before it ever opened.
 waited=0
-while ! grep -aqE '"command": *"variables"' "$responses" 2>/dev/null; do
+while :; do
+  # Through a file, because `screen | grep -q` under pipefail fails on the
+  # SIGPIPE that a matching grep causes, which reads as no match.
+  screen "$capture" >"$workdir/screen.txt" 2>/dev/null || true
+  if grep -q 'dap-vars stop' "$workdir/screen.txt"; then
+    break
+  fi
   sleep 1
   waited=$((waited + 1))
   if [[ $waited -gt 60 ]]; then
     stop_session
-    fail "the session never asked the target for variables" "$capture"
+    fail "the variables split never rendered in the editor" "$capture" "$variables"
   fi
 done
 sleep 2
 stop_session
 
 python3 "$root/tests/hardware-assert.py" \
-  "$requests" "$responses" "$build" "$source_file" "$line" ||
-  fail "the hardware exchange is not what it should be" "$capture"
+  "$requests" "$responses" "$build" "$source_file" "$line" "$variables" ||
+  fail "the hardware exchange or variables panel is not what it should be" "$capture" "$variables"
