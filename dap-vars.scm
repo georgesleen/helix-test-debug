@@ -206,16 +206,40 @@
     [(owner-alive? (car paths)) (car paths)]
     [else (first-live (cdr paths))]))
 
-;; Sorted so two live sessions at least pick the same file on every tick
-;; rather than alternating. Which of the two is undefined by design: pin
-;; one with dap-variables-path! when it matters.
+;; Candidate files, newest session first.
+;;
+;; Ordering by name picked the lowest pid, which is the *oldest* session:
+;; a session that outlives its editor command -- one helix failed to
+;; terminate, say -- then owned the panel forever, and the session the user
+;; just started was never shown. The proxy's own start time settles it, and
+;; unlike a pid it cannot wrap around. Name order is the fallback where
+;; there is no /proc, so two sessions still agree on one file per tick
+;; rather than alternating.
 (define (session-files)
-  (sort (apply append
-               (map (lambda (directory)
-                      (filter (lambda (entry) (ends-with? entry *file-suffix*))
-                              (entries-of directory)))
-                    (session-directories)))
-        string<?))
+  (let ([named (sort (apply append
+                            (map (lambda (directory)
+                                   (filter (lambda (entry)
+                                             (ends-with? entry *file-suffix*))
+                                           (entries-of directory)))
+                                 (session-directories)))
+                     string<?)])
+    (sort named (lambda (left right)
+                  (> (or (start-time-of left) 0) (or (start-time-of right) 0))))))
+
+;; Field 22 of /proc/<pid>/stat: when the proxy started, in clock ticks
+;; since boot. The executable name is field 2 and may itself hold spaces
+;; and brackets, so the fields are counted from after the last `)` rather
+;; than from the start of the line.
+(define (start-time-of path)
+  (let ([line (first-line (string-append "/proc/" (pid-of path) "/stat"))])
+    (if (not (string? line))
+        #f
+        ;; After the last `)` the first field is the state, which is field
+        ;; 3, so starttime sits 19 fields further along.
+        (let ([fields (split-whitespace (last (split-many line ")")))])
+          (if (< (length fields) 20)
+              #f
+              (string->number (list-ref fields 19)))))))
 
 (define (session-directories)
   (apply append
@@ -260,10 +284,10 @@
   (let ([name (file-name path)])
     (substring name 0 (- (string-length name) (string-length *file-suffix*)))))
 
-;; First line of the file, or #f when it cannot be read. Only the first
-;; line is read: it is the change token, and the rest of the file can be
-;; long.
-(define (file-token path)
+;; First line of a file, or #f when it cannot be read. Only one line is
+;; ever wanted: the panel's is its change token, and /proc/<pid>/stat is
+;; one line anyway.
+(define (first-line path)
   (if (and (string? path) (path-exists? path))
       (let ([line (call-with-exception-handler (lambda (failure) #f)
                                                (lambda ()
@@ -271,3 +295,8 @@
                                                                        read-line-from-port)))])
         (if (string? line) line #f))
       #f))
+
+;; The panel's change token: it carries a counter the proxy increments once
+;; per stop, so it differs after every stop.
+(define (file-token path)
+  (first-line path))

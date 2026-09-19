@@ -234,6 +234,18 @@ pub fn render(
         }
     }
 
+    // An empty panel is otherwise indistinguishable from a broken one. A
+    // frame compiled without debug info -- std, libtest's runner, anything
+    // reached by stepping out of your own code -- reports its scopes with
+    // nothing in them, and that is what is being shown.
+    if frame.is_some()
+        && !timed_out
+        && scopes.iter().all(|scope| scope.vars.is_empty() && !scope.truncated)
+    {
+        out.push_str("\n(no variables in scope: a frame without debug info,");
+        out.push_str(" such as std or libtest, reports none)\n");
+    }
+
     if timed_out {
         out.push_str("\n(variables timed out)\n");
     }
@@ -432,5 +444,44 @@ mod tests {
              \n\
              (variables timed out)\n"
         );
+    }
+
+    /// Stepping out of your own code lands in libtest or std, whose frames
+    /// carry no debug info: the adapter answers with scopes that hold
+    /// nothing. Bare empty scopes read as a broken panel, so the reason is
+    /// spelled out.
+    #[test]
+    fn explains_a_frame_that_has_no_variables() {
+        let frame = Frame {
+            id: Some(4),
+            name: "<test::types::RunnableTest>::run".to_string(),
+            path: None,
+            line: None,
+        };
+        let scopes = vec![
+            Scope { name: "Locals".to_string(), reference: 2, vars: Vec::new(), truncated: false },
+            Scope { name: "Globals".to_string(), reference: 3, vars: Vec::new(), truncated: false },
+        ];
+
+        let empty = render(12, Some(&frame), &scopes, false);
+        assert!(
+            empty.ends_with(
+                "\n(no variables in scope: a frame without debug info, \
+                 such as std or libtest, reports none)\n"
+            ),
+            "{empty}"
+        );
+
+        // A frame that does report variables says nothing of the sort.
+        let mut populated = scopes.clone();
+        populated[0].vars = vec![Var {
+            name: "n".to_string(),
+            ty: Some("usize".to_string()),
+            value: "11".to_string(),
+            reference: 0,
+            children: Vec::new(),
+            truncated: false,
+        }];
+        assert!(!render(12, Some(&frame), &populated, false).contains("no variables in scope"));
     }
 }

@@ -22,6 +22,15 @@ depends on are still moving. Breaking changes may land in any 0.y bump.
   gives the DAP breakpoint the corresponding ignore count. A failure inside
   a loop therefore stops with the failing iteration's locals instead of on
   the line's first execution.
+- The variables panel follows the newest live session. Candidate files were
+  ordered by name, which is the proxy's pid, so a session that outlived its
+  command -- one helix never terminated -- owned the panel permanently and
+  the session just started was never shown: the panel sat frozen on an old
+  frame with empty scopes. The proxy's start time from `/proc` decides now,
+  which no pid wraparound can reorder.
+- A frame carrying no debug info says so rather than rendering empty
+  scopes. Stepping out of your own code lands in libtest or std, and an
+  empty panel there was indistinguishable from a broken one.
 - The variables panel is written to `$XDG_RUNTIME_DIR` when there is one,
   named `<pid>.log` rather than `<pid>.txt`, and no longer fsynced. The
   runtime directory is tmpfs, so a panel rewritten on every stop costs no
